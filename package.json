@@ -1,0 +1,45 @@
+{
+  "name": "claude-tg-forum",
+  "version": "0.1.0",
+  "description": "Telegram forum bridge for Claude Code — one topic = one Claude Agent SDK session",
+  "type": "module",
+  "license": "MIT",
+  "author": "Filo6699",
+  "homepage": "https://github.com/Filo6699/claude-tg-forum#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Filo6699/claude-tg-forum.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Filo6699/claude-tg-forum/issues"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "claude-agent-sdk",
+    "telegram",
+    "telegram-bot",
+    "grammy",
+    "ai-agent",
+    "forum"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.0",
+    "dotenv": "^16.4.5",
+    "grammy": "^1.30.0",
+    "telegramify-markdown": "^1.3.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
