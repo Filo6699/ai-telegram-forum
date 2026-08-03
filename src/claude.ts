@@ -1,7 +1,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { Bot } from "grammy";
 import { cfg } from "./config.ts";
-import { StreamRenderer } from "./stream.ts";
+import { TopicRenderer } from "./render.ts";
 
 export interface TurnResult {
   sessionId: string | undefined;
@@ -51,10 +51,24 @@ function permissionOptions() {
   };
 }
 
+/** Sum per-model usage; used when the result's flat `usage` comes back empty. */
+function usageFromModels(modelUsage: Record<string, any> | undefined) {
+  const acc = { inTokens: 0, outTokens: 0 };
+  for (const u of Object.values(modelUsage ?? {})) {
+    acc.inTokens +=
+      (u?.inputTokens ?? 0) +
+      (u?.cacheReadInputTokens ?? 0) +
+      (u?.cacheCreationInputTokens ?? 0);
+    acc.outTokens += u?.outputTokens ?? 0;
+  }
+  return acc;
+}
+
 /**
- * Run one conversational turn for a topic. Streams assistant text (and tool
- * activity markers) into the topic and returns the (possibly new) session id
- * to persist. Pass `resume` to continue an existing session.
+ * Run one conversational turn for a topic. Collects assistant text (and tool
+ * activity markers), posts it to the topic once the turn is complete, and
+ * returns the (possibly new) session id to persist. Pass `resume` to continue
+ * an existing session.
  */
 export async function runTurn(
   bot: Bot,
@@ -63,7 +77,7 @@ export async function runTurn(
   prompt: string,
   resume?: string | null,
 ): Promise<TurnResult> {
-  const stream = new StreamRenderer(bot, cfg.chatId, threadId);
+  const out = new TopicRenderer(bot, cfg.chatId, threadId);
   let sessionId: string | undefined = resume ?? undefined;
   let ok = false;
   const usage = { inTokens: 0, outTokens: 0, costUsd: 0 };
@@ -74,7 +88,6 @@ export async function runTurn(
       options: {
         cwd,
         model: cfg.model,
-        includePartialMessages: true,
         ...(resume ? { resume } : {}),
         ...permissionOptions(),
       },
@@ -84,18 +97,11 @@ export async function runTurn(
           if (msg.subtype === "init") sessionId = msg.session_id;
           break;
 
-        case "stream_event": {
-          const ev = msg.event;
-          if (
-            ev.type === "content_block_delta" &&
-            ev.delta.type === "text_delta"
-          ) {
-            stream.push(ev.delta.text);
-          } else if (
-            ev.type === "content_block_start" &&
-            ev.content_block.type === "tool_use"
-          ) {
-            stream.push(`\n\n🔧 ${ev.content_block.name}\n`);
+        // Final assistant messages are the source of truth for the reply.
+        case "assistant": {
+          for (const block of msg.message.content) {
+            if (block.type === "text") out.push(block.text);
+            else if (block.type === "tool_use") out.push(`\n\n🔧 ${block.name}\n`);
           }
           break;
         }
@@ -110,18 +116,29 @@ export async function runTurn(
             (u.cache_creation_input_tokens ?? 0);
           usage.outTokens = u.output_tokens ?? 0;
           usage.costUsd = (msg as any).total_cost_usd ?? 0;
+          if (!usage.inTokens && !usage.outTokens) {
+            const m = usageFromModels((msg as any).modelUsage);
+            usage.inTokens = m.inTokens;
+            usage.outTokens = m.outTokens;
+          }
+          // Last-resort text: if no assistant message carried the reply, the
+          // result still holds it in full.
+          if (ok && out.isEmpty) {
+            const text = (msg as any).result;
+            if (typeof text === "string") out.push(text);
+          }
           if (!ok) {
-            stream.push(`\n\n⚠️ ${msg.subtype}: ${(msg as any).error ?? ""}`);
+            out.push(`\n\n⚠️ ${msg.subtype}: ${(msg as any).error ?? ""}`);
           }
           break;
         }
       }
     }
   } catch (err) {
-    stream.push(`\n\n❌ ${String(err)}`);
+    out.push(`\n\n❌ ${String(err)}`);
     console.error(`[claude] turn failed on thread ${threadId}:`, err);
   } finally {
-    await stream.finish();
+    await out.send();
   }
 
   return { sessionId, ok, usage };

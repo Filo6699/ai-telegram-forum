@@ -119,8 +119,8 @@ for that cwd. Defaults: close after 36h, delete 7 days after closing.
 | File | Role |
 |---|---|
 | `src/index.ts`  | bot entry, auth, routing by `message_thread_id` |
-| `src/claude.ts` | one turn via the Agent SDK, streaming to Telegram |
-| `src/stream.ts` | throttled, multi-message Telegram renderer |
+| `src/claude.ts` | one turn via the Agent SDK, collected and posted to Telegram |
+| `src/render.ts` | posts a finished turn as one or more Telegram messages |
 | `src/cwd.ts`    | parse `@alias` / `/path` prefix, make titles |
 | `src/db.ts`     | SQLite state (`node:sqlite`) |
 | `src/sweep.ts`  | close/delete idle topics, prune transcripts |
@@ -130,8 +130,8 @@ for that cwd. Defaults: close after 36h, delete 7 days after closing.
 
 - The Agent SDK has no clean per-turn abort yet; a runaway turn finishes or you
   restart the process. Consider adding `maxTurns` in `claude.ts` if needed.
-- Telegram edits are throttled to ~1/sec; very fast token streams appear in
-  bursts, not per-token.
+- Replies are posted only once a turn is complete — there is no token-by-token
+  streaming, so a long turn is silent until it finishes.
 - Bots can't create groups — the forum itself is created by you, once.
 - Text only for now — images and file attachments aren't handled.
 
