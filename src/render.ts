@@ -1,18 +1,23 @@
 import type { Bot } from "grammy";
 import telegramify from "telegramify-markdown";
+import { toTelegramHtml } from "./html.js";
 
 const TG_LIMIT = 4096;
 const RAW_CHUNK = 2800; // raw markdown per message; formatted stays under TG_LIMIT
 
-/** Convert markdown to Telegram MarkdownV2; null if it can't be parsed. */
-function safeFormat(raw: string): string | null {
+/** Run a renderer, returning null if it throws or produces nothing. */
+function safeRender(fn: (s: string) => string, raw: string): string | null {
   try {
-    const out = telegramify(raw, "escape");
+    const out = fn(raw);
     return out.length ? out : null;
   } catch {
     return null;
   }
 }
+
+/** Convert markdown to Telegram MarkdownV2; null if it can't be parsed. */
+const safeFormat = (raw: string): string | null =>
+  safeRender((s) => telegramify(s, "escape"), raw);
 
 /**
  * Collects a turn's output and posts it to a forum topic once the turn is
@@ -20,9 +25,11 @@ function safeFormat(raw: string): string | null {
  * rendered reliably, and half-written messages only add noise to the topic.
  *
  * On send(), each chunk goes out as MarkdownV2 so code blocks, inline code and
- * bold render properly. If a chunk fails to parse or Telegram rejects the
- * formatting, it falls back to plain text, so a message is never lost to a
- * formatting error. An empty buffer sends nothing at all.
+ * bold render properly. If Telegram rejects that, the chunk is re-sent as
+ * Telegram HTML — a stricter renderer that emits balanced tags and escapes
+ * everything else, so formatting survives input MarkdownV2 chokes on. Plain
+ * text is the last resort, so a message is never lost to a formatting error.
+ * An empty buffer sends nothing at all.
  */
 export class TopicRenderer {
   private buffer = "";
@@ -77,25 +84,33 @@ export class TopicRenderer {
     return chunks.filter((c) => c.trim().length > 0);
   }
 
+  /**
+   * Send one chunk, degrading gracefully: MarkdownV2 → HTML → plain text.
+   *
+   * Formatted output is never truncated — cutting mid-escape or mid-tag is
+   * exactly what breaks the parse. A rendering that overflows the limit is
+   * skipped in favour of the next tier, and chunkRaw() keeps chunks small
+   * enough that this stays rare.
+   */
   private async sendOne(raw: string): Promise<void> {
-    const formatted = safeFormat(raw);
-    if (formatted) {
+    const attempts: Array<{ text: string | null; mode?: "MarkdownV2" | "HTML" }> = [
+      { text: safeFormat(raw), mode: "MarkdownV2" },
+      { text: safeRender(toTelegramHtml, raw), mode: "HTML" },
+      { text: raw.slice(0, TG_LIMIT) },
+    ];
+
+    for (const { text, mode } of attempts) {
+      if (!text || (mode && text.length > TG_LIMIT)) continue;
       try {
-        await this.bot.api.sendMessage(this.chatId, formatted.slice(0, TG_LIMIT), {
+        await this.bot.api.sendMessage(this.chatId, text, {
           message_thread_id: this.threadId,
-          parse_mode: "MarkdownV2",
+          ...(mode ? { parse_mode: mode } : {}),
         });
         return;
       } catch (err) {
-        console.warn(`[render] MarkdownV2 rejected, retrying plain:`, String(err));
+        const next = mode === "MarkdownV2" ? "HTML" : mode === "HTML" ? "plain" : "nothing";
+        console.warn(`[render] ${mode ?? "plain"} rejected, falling back to ${next}:`, String(err));
       }
-    }
-    try {
-      await this.bot.api.sendMessage(this.chatId, raw.slice(0, TG_LIMIT), {
-        message_thread_id: this.threadId,
-      });
-    } catch (err) {
-      console.warn(`[render] send failed:`, String(err));
     }
   }
 

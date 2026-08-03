@@ -10,6 +10,7 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 | `src/index.ts`  | bot entry, auth, routing by `message_thread_id` |
 | `src/claude.ts` | one turn via the Agent SDK |
 | `src/render.ts` | posts a finished turn to a topic |
+| `src/html.ts`   | markdown → Telegram HTML (fallback when MarkdownV2 fails) |
 | `src/cwd.ts`    | `@alias` / `/path` prefix parsing, titles |
 | `src/db.ts`     | SQLite state (`node:sqlite`) |
 | `src/sweep.ts`  | close/delete idle topics |
