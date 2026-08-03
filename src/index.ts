@@ -136,7 +136,9 @@ async function main() {
   const me = await bot.api.getMe();
   botUsername = me.username;
   console.log(`[bot] running as @${me.username}`);
-  console.log(`[bot] forum chat ${cfg.chatId}, launcher thread ${cfg.launcherThreadId}`);
+  console.log(
+    `[bot] forum chat ${cfg.chatId}, launcher thread ${cfg.launcherThreadId ?? "General"}`,
+  );
   console.log(`[bot] permission=${cfg.permission} model=${cfg.model}`);
 
   await bot.api.setMyCommands([

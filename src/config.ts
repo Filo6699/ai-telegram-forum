@@ -6,6 +6,26 @@ function req(name: string): string {
   return v;
 }
 
+function reqNum(name: string): number {
+  const raw = req(name);
+  const n = Number(raw);
+  if (!Number.isFinite(n)) throw new Error(`${name} must be a number, got: ${raw}`);
+  return n;
+}
+
+/**
+ * The launcher topic. Messages in Telegram's General topic carry no
+ * `message_thread_id`, so `General` (the default) maps to undefined.
+ */
+function parseLauncher(raw: string | undefined): number | undefined {
+  if (!raw || raw.trim().toLowerCase() === "general") return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    throw new Error(`LAUNCHER_THREAD_ID must be a number or "General", got: ${raw}`);
+  }
+  return n;
+}
+
 function parseProjects(raw: string | undefined): Record<string, string> {
   if (!raw) return {};
   try {
@@ -20,9 +40,9 @@ const hours = (name: string, fallback: number) =>
 
 export const cfg = {
   token: req("BOT_TOKEN"),
-  chatId: Number(req("FORUM_CHAT_ID")),
-  allowedUserId: Number(req("ALLOWED_USER_ID")),
-  launcherThreadId: Number(req("LAUNCHER_THREAD_ID")),
+  chatId: reqNum("FORUM_CHAT_ID"),
+  allowedUserId: reqNum("ALLOWED_USER_ID"),
+  launcherThreadId: parseLauncher(process.env.LAUNCHER_THREAD_ID),
 
   defaultCwd: req("DEFAULT_CWD"),
   projects: parseProjects(process.env.PROJECTS),

@@ -82,12 +82,20 @@ export async function runTurn(
   let ok = false;
   const usage = { inTokens: 0, outTokens: 0, costUsd: 0 };
 
+  // The SDK's own error is just an exit code; the reason (auth, terms, bad
+  // model, …) only shows up on the child's stderr.
+  let stderr = "";
+
   try {
     for await (const msg of query({
       prompt,
       options: {
         cwd,
         model: cfg.model,
+        stderr: (data: string) => {
+          stderr += data;
+          console.error(`[claude:${threadId}] ${data.trimEnd()}`);
+        },
         ...(resume ? { resume } : {}),
         ...permissionOptions(),
       },
@@ -135,7 +143,8 @@ export async function runTurn(
       }
     }
   } catch (err) {
-    out.push(`\n\n❌ ${String(err)}`);
+    const detail = stderr.trim().split("\n").filter(Boolean).slice(-5).join("\n");
+    out.push(`\n\n❌ ${String(err)}` + (detail ? `\n\n\`\`\`\n${detail}\n\`\`\`` : ""));
     console.error(`[claude] turn failed on thread ${threadId}:`, err);
   } finally {
     await out.send();
