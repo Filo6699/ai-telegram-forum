@@ -4,6 +4,7 @@ import { queryOptions, readUsage, type Usage } from "./claude.ts";
 import { cfg } from "./config.ts";
 import { addUsage, setSession, touch } from "./db.ts";
 import { fmtTokens, humanMs } from "./fmt.ts";
+import { clearPermissions } from "./permission.ts";
 import { TopicRenderer } from "./render.ts";
 import { TurnStatus } from "./status.ts";
 import { createTgChannel, TG_SEND_TOOL, type TgChannel } from "./tg-tools.ts";
@@ -45,7 +46,7 @@ export class TopicSession {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
-    bot: Bot,
+    private bot: Bot,
     readonly threadId: number,
     private cwd: string,
     private sessionId: string | null,
@@ -71,6 +72,8 @@ export class TopicSession {
   close(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
+    // Blanket approvals are scoped to the live session, not to the topic.
+    clearPermissions(this.threadId);
     this.ended = true;
     this.wake?.();
     this.wake = null;
@@ -140,6 +143,8 @@ export class TopicSession {
       this.q = query({
         prompt: this.input(),
         options: queryOptions({
+          bot: this.bot,
+          threadId: this.threadId,
           cwd: this.cwd,
           resume: this.sessionId,
           channel: this.channel,
@@ -194,6 +199,8 @@ export class TopicSession {
       this.running = false;
       this.q = null;
       this.ended = false;
+      // Nothing can act on an approval once the child is gone.
+      clearPermissions(this.threadId);
       // A crash loses whatever the iterator hadn't handed over yet. Say so
       // instead of leaving the sender waiting on a reply that won't come.
       if (this.pending.length) {

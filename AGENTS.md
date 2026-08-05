@@ -9,6 +9,7 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 |---|---|
 | `src/index.ts`  | bot entry, auth, routing by `message_thread_id` |
 | `src/session.ts` | one live SDK session per topic; turn lifecycle |
+| `src/permission.ts` | tool approval prompts + their inline buttons |
 | `src/claude.ts` | SDK options: model, permission policy, usage accounting |
 | `src/tg-tools.ts` | in-process MCP server — the agent's own `send` tool |
 | `src/status.ts` | the live status line / turn summary message |
@@ -44,6 +45,10 @@ npm run typecheck  # tsc --noEmit — must be clean before you commit
   next step — never interrupt a running turn to hand it over, and never add a
   queue in front of it. Anything that shuts a topic down (sweep, idle timeout)
   must go through `endSession`, or the child process is orphaned.
+- **Callback queries are inbound too.** They're the one path that doesn't go
+  through the message handler's gate, so every handler must check
+  `ALLOWED_USER_ID` itself. A permission prompt must always settle — button,
+  timeout, or session end — or the tool call waits forever.
 - Keep it dependency-light and single-user. Don't add a runtime dependency or
   multi-user auth without discussing the design first.
 - Don't touch `.env` or `data/` — both are git-ignored and hold real state.

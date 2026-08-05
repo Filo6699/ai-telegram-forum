@@ -88,15 +88,19 @@ The chosen cwd is stored per topic, so inside a topic you never repeat it.
 
 ## Permissions
 
-The bot runs headless, so there's no interactive prompt to answer — every tool
-call must be resolved automatically. Two modes:
+Two modes:
 
 - **`auto`** (default, recommended) — auto-approves only the tools in
-  `ALLOWED_TOOLS`, denies everything else, and blocks obviously destructive
-  shell commands (`rm -rf`, `mkfs`, `dd of=/dev/…`, `curl | sh`, fork bombs,
-  `shutdown`, …). Tighten it further by trimming `ALLOWED_TOOLS` — e.g. drop
+  `ALLOWED_TOOLS`. Anything else asks you in the topic, with ✅ / ❌ / "always
+  allow here" buttons, and waits. No answer within
+  `PERMISSION_TIMEOUT_MINUTES` (default 10) counts as a deny, so a turn can't
+  hang on a phone nobody is looking at. Commands that look obviously
+  destructive (`rm -rf`, `mkfs`, `dd of=/dev/…`, `curl | sh`, fork bombs,
+  `shutdown`, …) always ask, even if `Bash` is allowlisted or you granted it a
+  blanket approval. Tighten it further by trimming `ALLOWED_TOOLS` — e.g. drop
   `Bash` for a read/edit-only assistant, or drop `Write,Edit` for read-only.
-- **`bypass`** — approves every tool with no checks.
+  "Always allow" lasts as long as the topic's live session, not forever.
+- **`bypass`** — approves every tool with no checks and never asks.
 
 > ⚠️ **`bypass` and even `auto` let Claude modify files and run shell commands
 > in the target `cwd` without asking.** The Bash denylist is defense-in-depth,
@@ -126,6 +130,7 @@ finish.
 |---|---|
 | `src/index.ts`  | bot entry, auth, routing by `message_thread_id` |
 | `src/session.ts` | one live Agent SDK session per topic |
+| `src/permission.ts` | tool approval prompts (inline buttons) |
 | `src/claude.ts` | SDK options: model, permissions, usage accounting |
 | `src/tg-tools.ts` | in-process MCP server: the agent's own `send` tool |
 | `src/status.ts` | live status line, then the turn summary |

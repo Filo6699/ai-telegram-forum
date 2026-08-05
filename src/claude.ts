@@ -1,5 +1,7 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import type { Bot } from "grammy";
 import { cfg } from "./config.ts";
+import { askPermission, isBlanketAllowed } from "./permission.ts";
 import { TG_SEND_TOOL, TG_SYSTEM_PROMPT, type TgChannel } from "./tg-tools.ts";
 
 export interface Usage {
@@ -29,32 +31,42 @@ function isDangerousBash(input: Record<string, unknown>): boolean {
 /** Tools the agent may use without asking. Talking to the user is never gated. */
 export const autoAllowed = [...cfg.allowedTools, TG_SEND_TOOL];
 
-function permissionOptions() {
+function permissionOptions(bot: Bot, threadId: number) {
   if (cfg.permission === "bypass") {
     return {
       permissionMode: "bypassPermissions" as const,
       allowDangerouslySkipPermissions: true,
     };
   }
-  // "auto": only ALLOWED_TOOLS are approved; everything else is denied. This
-  // never blocks waiting for input, which matters in a headless bot.
+  // "auto": ALLOWED_TOOLS run unattended; anything else asks in the topic and
+  // waits for a button. A command flagged as destructive always asks, even if
+  // its tool is allowlisted or was granted a blanket approval.
   return {
     permissionMode: "default" as const,
     allowedTools: autoAllowed,
     canUseTool: async (name: string, input: Record<string, unknown>) => {
-      if (!autoAllowed.includes(name)) {
-        return { behavior: "deny" as const, message: `Tool ${name} not allowed` };
+      const dangerous = name === "Bash" && isDangerousBash(input);
+      if (!dangerous && (autoAllowed.includes(name) || isBlanketAllowed(threadId, name))) {
+        return { behavior: "allow" as const, updatedInput: input };
       }
-      if (name === "Bash" && isDangerousBash(input)) {
-        return { behavior: "deny" as const, message: "Blocked destructive command" };
-      }
-      return { behavior: "allow" as const, updatedInput: input };
+      const decision = await askPermission(
+        bot,
+        threadId,
+        name,
+        input,
+        dangerous ? "flagged as destructive" : undefined,
+      );
+      return decision === "allow"
+        ? { behavior: "allow" as const, updatedInput: input }
+        : { behavior: "deny" as const, message: `Denied by the user over Telegram` };
     },
   };
 }
 
 /** Everything the SDK needs to run one topic's session. */
 export function queryOptions(opts: {
+  bot: Bot;
+  threadId: number;
   cwd: string;
   resume: string | null;
   channel: TgChannel;
@@ -67,7 +79,7 @@ export function queryOptions(opts: {
     systemPrompt: { type: "preset", preset: "claude_code", append: TG_SYSTEM_PROMPT },
     stderr: opts.onStderr,
     ...(opts.resume ? { resume: opts.resume } : {}),
-    ...permissionOptions(),
+    ...permissionOptions(opts.bot, opts.threadId),
   };
 }
 

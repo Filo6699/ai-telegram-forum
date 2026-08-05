@@ -64,5 +64,8 @@ export const cfg = {
   // next message resumes the same session from disk.
   sessionIdleMs: Number(process.env.SESSION_IDLE_MINUTES ?? 20) * 60_000,
 
+  // How long a permission prompt waits for a button press before denying.
+  permissionTimeoutMs: Number(process.env.PERMISSION_TIMEOUT_MINUTES ?? 10) * 60_000,
+
   dbPath: process.env.DB_PATH ?? "./data/state.db",
 } as const;

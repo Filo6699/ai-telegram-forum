@@ -2,6 +2,7 @@ import { Bot } from "grammy";
 import { cfg } from "./config.ts";
 import { resolveCwd, titleFrom } from "./cwd.ts";
 import { fmtTokens } from "./fmt.ts";
+import { registerPermissionButtons } from "./permission.ts";
 import { sessionFor } from "./session.ts";
 import { startSweep } from "./sweep.ts";
 import { createTopic, getTopic, setStatus, totals, type Topic } from "./db.ts";
@@ -119,8 +120,9 @@ async function main() {
     { command: "usage", description: "Token/cost usage (this topic, or all in the launcher)" },
   ]);
 
+  registerPermissionButtons(bot);
   startSweep(bot);
-  await bot.start({ allowed_updates: ["message"] });
+  await bot.start({ allowed_updates: ["message", "callback_query"] });
 }
 
 main().catch((err) => {
