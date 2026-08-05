@@ -114,12 +114,19 @@ active ──idle CLOSE_AFTER_HOURS──▶ closed ──idle DELETE_AFTER_HOUR
 A sweep runs every 5 min. `deleted` also removes the on-disk Claude transcripts
 for that cwd. Defaults: close after 36h, delete 7 days after closing.
 
+Separately, a topic's Claude process is shut down after `SESSION_IDLE_MINUTES`
+(default 20) of silence. That's invisible from Telegram — the next message
+resumes the same session — but while the process is warm, anything you send is
+handed to the agent at its next step instead of waiting for the current turn to
+finish.
+
 ## Files
 
 | File | Role |
 |---|---|
 | `src/index.ts`  | bot entry, auth, routing by `message_thread_id` |
-| `src/claude.ts` | one turn via the Agent SDK |
+| `src/session.ts` | one live Agent SDK session per topic |
+| `src/claude.ts` | SDK options: model, permissions, usage accounting |
 | `src/tg-tools.ts` | in-process MCP server: the agent's own `send` tool |
 | `src/status.ts` | live status line, then the turn summary |
 | `src/render.ts` | markdown → Telegram messages, with format fallback |

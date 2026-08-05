@@ -30,6 +30,8 @@ export interface TgChannel {
   server: ReturnType<typeof createSdkMcpServer>;
   /** Messages the agent posted this turn. Zero means it never spoke. */
   readonly sent: number;
+  /** Called at the start of every turn — `sent` counts the current turn only. */
+  resetSent(): void;
 }
 
 /** An in-process MCP server that lets the agent post into one specific topic. */
@@ -74,6 +76,9 @@ export function createTgChannel(out: TopicRenderer): TgChannel {
     server,
     get sent() {
       return sent;
+    },
+    resetSent() {
+      sent = 0;
     },
   };
 }

@@ -1,9 +1,10 @@
 import { rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Bot } from "grammy";
+import { GrammyError, HttpError, type Bot } from "grammy";
 import { cfg } from "./config.ts";
-import { deleteTopic, listStale, setStatus } from "./db.ts";
+import { deleteTopic, listStale, setStatus, type Topic } from "./db.ts";
+import { endSession } from "./session.ts";
 
 const SWEEP_INTERVAL_MS = 5 * 60_000;
 
@@ -22,31 +23,77 @@ async function removeTranscripts(cwd: string): Promise<void> {
   }
 }
 
+/** The topic no longer exists on Telegram — usually deleted by hand. */
+function isTopicGone(err: unknown): boolean {
+  if (!(err instanceof GrammyError)) return false;
+  const d = err.description.toUpperCase();
+  return (
+    d.includes("TOPIC_ID_INVALID") ||
+    d.includes("TOPIC_DELETED") ||
+    d.includes("MESSAGE THREAD NOT FOUND") ||
+    d.includes("CHAT NOT FOUND")
+  );
+}
+
+/** Telegram is unreachable — no point hammering the rest of the sweep. */
+function isNetworkDown(err: unknown): boolean {
+  return err instanceof HttpError;
+}
+
+/** Drop a topic we can no longer reach: transcripts + DB row. */
+async function forget(t: Topic, reason: string): Promise<void> {
+  endSession(t.thread_id);
+  await removeTranscripts(t.cwd);
+  deleteTopic(t.thread_id);
+  console.log(`[sweep] forgot topic ${t.thread_id} (${t.title}) — ${reason}`);
+}
+
 async function sweepOnce(bot: Bot): Promise<void> {
   const { toClose, toDelete } = listStale(cfg.closeAfterMs, cfg.deleteAfterMs);
 
   for (const t of toClose) {
     try {
       await bot.api.closeForumTopic(cfg.chatId, t.thread_id);
+      endSession(t.thread_id);
       setStatus(t.thread_id, "closed");
       console.log(`[sweep] closed idle topic ${t.thread_id} (${t.title})`);
     } catch (err) {
-      console.warn(`[sweep] close failed for ${t.thread_id}:`, String(err));
+      if (isTopicGone(err)) {
+        await forget(t, "gone from Telegram");
+      } else if (isNetworkDown(err)) {
+        console.warn("[sweep] Telegram unreachable, retrying next sweep");
+        return;
+      } else if (err instanceof GrammyError && err.description.includes("TOPIC_NOT_MODIFIED")) {
+        setStatus(t.thread_id, "closed"); // already closed by hand
+      } else {
+        console.warn(`[sweep] close failed for ${t.thread_id}:`, String(err));
+      }
     }
   }
 
   for (const t of toDelete) {
     try {
       await bot.api.deleteForumTopic(cfg.chatId, t.thread_id);
+      endSession(t.thread_id);
       await removeTranscripts(t.cwd);
       deleteTopic(t.thread_id);
       console.log(`[sweep] deleted stale topic ${t.thread_id} (${t.title})`);
     } catch (err) {
-      console.warn(`[sweep] delete failed for ${t.thread_id}:`, String(err));
+      if (isTopicGone(err)) {
+        await forget(t, "already deleted");
+      } else if (isNetworkDown(err)) {
+        console.warn("[sweep] Telegram unreachable, retrying next sweep");
+        return;
+      } else {
+        console.warn(`[sweep] delete failed for ${t.thread_id}:`, String(err));
+      }
     }
   }
 }
 
 export function startSweep(bot: Bot): void {
+  // Run once at boot: a bot restarting more often than SWEEP_INTERVAL_MS would
+  // otherwise never sweep at all.
+  void sweepOnce(bot);
   setInterval(() => void sweepOnce(bot), SWEEP_INTERVAL_MS);
 }

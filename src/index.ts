@@ -1,35 +1,12 @@
 import { Bot } from "grammy";
 import { cfg } from "./config.ts";
-import { runTurn } from "./claude.ts";
 import { resolveCwd, titleFrom } from "./cwd.ts";
 import { fmtTokens } from "./fmt.ts";
+import { sessionFor } from "./session.ts";
 import { startSweep } from "./sweep.ts";
-import {
-  addUsage,
-  createTopic,
-  getTopic,
-  setSession,
-  setStatus,
-  totals,
-  touch,
-  type Topic,
-} from "./db.ts";
+import { createTopic, getTopic, setStatus, totals, type Topic } from "./db.ts";
 
 const bot = new Bot(cfg.token);
-
-// Per-topic serialization: never run two turns in the same topic at once.
-const locks = new Map<number, Promise<unknown>>();
-function withLock<T>(threadId: number, fn: () => Promise<T>): Promise<T> {
-  const prev = locks.get(threadId) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
-  locks.set(
-    threadId,
-    next.finally(() => {
-      if (locks.get(threadId) === next) locks.delete(threadId);
-    }),
-  );
-  return next;
-}
 
 const isLauncher = (threadId: number | undefined) =>
   threadId === undefined || threadId === cfg.launcherThreadId;
@@ -85,6 +62,10 @@ bot.on("message:text", async (ctx) => {
     return;
   }
 
+  // Receipt ack. A message sent mid-turn won't be answered until the agent
+  // reaches its next step, so say "seen" right away.
+  void ctx.react("👀").catch(() => {});
+
   // ---- A) Launcher: spin up a new topic + session -----------------------
   if (isLauncher(thread)) {
     const { cwd, prompt } = resolveCwd(text);
@@ -98,12 +79,7 @@ bot.on("message:text", async (ctx) => {
       message_thread_id: cfg.launcherThreadId,
     });
 
-    await withLock(tid, async () => {
-      const { sessionId, usage } = await runTurn(bot, tid, cwd, prompt);
-      if (sessionId) setSession(tid, sessionId);
-      else touch(tid);
-      addUsage(tid, usage);
-    });
+    await sessionFor(bot, { thread_id: tid, cwd, session_id: null }).send(prompt);
     return;
   }
 
@@ -112,20 +88,18 @@ bot.on("message:text", async (ctx) => {
   const t = getTopic(thread);
   if (!t) return; // not a topic we manage
 
-  await withLock(thread, async () => {
-    if (t.status === "closed") {
-      try {
-        await bot.api.reopenForumTopic(cfg.chatId, thread);
-      } catch (err) {
-        console.warn(`[reopen] failed for ${thread}:`, String(err));
-      }
-      setStatus(thread, "active");
+  if (t.status === "closed") {
+    try {
+      await bot.api.reopenForumTopic(cfg.chatId, thread);
+    } catch (err) {
+      console.warn(`[reopen] failed for ${thread}:`, String(err));
     }
-    touch(thread);
-    const { sessionId, usage } = await runTurn(bot, thread, t.cwd, text, t.session_id);
-    if (sessionId) setSession(thread, sessionId);
-    addUsage(thread, usage);
-  });
+    setStatus(thread, "active");
+  }
+
+  // The session takes it from here: if a turn is already running, this lands
+  // in front of the agent at its next step rather than waiting in a queue.
+  await sessionFor(bot, t).send(text);
 });
 
 bot.catch((err) => {

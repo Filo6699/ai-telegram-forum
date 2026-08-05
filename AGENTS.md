@@ -8,7 +8,8 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 | File | Role |
 |---|---|
 | `src/index.ts`  | bot entry, auth, routing by `message_thread_id` |
-| `src/claude.ts` | one turn via the Agent SDK |
+| `src/session.ts` | one live SDK session per topic; turn lifecycle |
+| `src/claude.ts` | SDK options: model, permission policy, usage accounting |
 | `src/tg-tools.ts` | in-process MCP server — the agent's own `send` tool |
 | `src/status.ts` | the live status line / turn summary message |
 | `src/render.ts` | markdown → topic messages, with format fallback |
@@ -38,6 +39,11 @@ npm run typecheck  # tsc --noEmit — must be clean before you commit
   ended without the agent ever calling `send` — losing a reply the session
   recorded is the bug this design exists to prevent. Errors always get posted,
   regardless of that fallback.
+- **A topic's session outlives its turns.** `TopicSession` feeds the SDK from an
+  iterator that stays open, so an incoming message is delivered at the agent's
+  next step — never interrupt a running turn to hand it over, and never add a
+  queue in front of it. Anything that shuts a topic down (sweep, idle timeout)
+  must go through `endSession`, or the child process is orphaned.
 - Keep it dependency-light and single-user. Don't add a runtime dependency or
   multi-user auth without discussing the design first.
 - Don't touch `.env` or `data/` — both are git-ignored and hold real state.

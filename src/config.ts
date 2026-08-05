@@ -59,5 +59,10 @@ export const cfg = {
   closeAfterMs: hours("CLOSE_AFTER_HOURS", 36),
   deleteAfterMs: hours("DELETE_AFTER_HOURS", 168),
 
+  // How long a topic's Claude process is kept alive after its last message.
+  // While it lives, new messages reach the agent mid-turn; once it's gone the
+  // next message resumes the same session from disk.
+  sessionIdleMs: Number(process.env.SESSION_IDLE_MINUTES ?? 20) * 60_000,
+
   dbPath: process.env.DB_PATH ?? "./data/state.db",
 } as const;
