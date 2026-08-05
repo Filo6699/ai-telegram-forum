@@ -19,17 +19,30 @@ function safeRender(fn: (s: string) => string, raw: string): string | null {
 const safeFormat = (raw: string): string | null =>
   safeRender((s) => telegramify(s, "escape"), raw);
 
+type Mode = "MarkdownV2" | "HTML" | undefined;
+
 /**
- * Collects a turn's output and posts it to a forum topic once the turn is
- * finished. Nothing is sent while the turn runs: partial markdown can't be
- * rendered reliably, and half-written messages only add noise to the topic.
+ * Rendering tiers for one chunk, best first. Formatted output is never
+ * truncated — cutting mid-escape or mid-tag is exactly what breaks the parse;
+ * an overflowing rendering is skipped in favour of the next tier.
+ */
+function tiers(raw: string): Array<{ text: string | null; mode: Mode }> {
+  return [
+    { text: safeFormat(raw), mode: "MarkdownV2" },
+    { text: safeRender(toTelegramHtml, raw), mode: "HTML" },
+    { text: raw.slice(0, TG_LIMIT), mode: undefined },
+  ];
+}
+
+/**
+ * Posts markdown into a forum topic, degrading gracefully: MarkdownV2 →
+ * Telegram HTML → plain text, so a message is never lost to a formatting error.
  *
- * On send(), each chunk goes out as MarkdownV2 so code blocks, inline code and
- * bold render properly. If Telegram rejects that, the chunk is re-sent as
- * Telegram HTML — a stricter renderer that emits balanced tags and escapes
- * everything else, so formatting survives input MarkdownV2 chokes on. Plain
- * text is the last resort, so a message is never lost to a formatting error.
- * An empty buffer sends nothing at all.
+ * Two ways in. `sendText` posts immediately — that is what the agent's
+ * `mcp__tg__send` tool uses, and what makes a topic feel live. `push`/`send`
+ * buffer a whole turn and post it at the end; that path is the fallback for a
+ * turn where the agent never spoke through the tool, so a reply the session
+ * recorded can't be dropped on the floor.
  */
 export class TopicRenderer {
   private buffer = "";
@@ -42,6 +55,10 @@ export class TopicRenderer {
 
   push(text: string): void {
     this.buffer += text;
+  }
+
+  clear(): void {
+    this.buffer = "";
   }
 
   get isEmpty(): boolean {
@@ -84,41 +101,60 @@ export class TopicRenderer {
     return chunks.filter((c) => c.trim().length > 0);
   }
 
-  /**
-   * Send one chunk, degrading gracefully: MarkdownV2 → HTML → plain text.
-   *
-   * Formatted output is never truncated — cutting mid-escape or mid-tag is
-   * exactly what breaks the parse. A rendering that overflows the limit is
-   * skipped in favour of the next tier, and chunkRaw() keeps chunks small
-   * enough that this stays rare.
-   */
-  private async sendOne(raw: string): Promise<void> {
-    const attempts: Array<{ text: string | null; mode?: "MarkdownV2" | "HTML" }> = [
-      { text: safeFormat(raw), mode: "MarkdownV2" },
-      { text: safeRender(toTelegramHtml, raw), mode: "HTML" },
-      { text: raw.slice(0, TG_LIMIT) },
-    ];
-
-    for (const { text, mode } of attempts) {
+  /** Send one chunk. Returns its message id, or null if every tier failed. */
+  private async sendOne(raw: string): Promise<number | null> {
+    for (const { text, mode } of tiers(raw)) {
       if (!text || (mode && text.length > TG_LIMIT)) continue;
       try {
-        await this.bot.api.sendMessage(this.chatId, text, {
+        const sent = await this.bot.api.sendMessage(this.chatId, text, {
           message_thread_id: this.threadId,
           ...(mode ? { parse_mode: mode } : {}),
         });
-        return;
+        return sent.message_id;
       } catch (err) {
         const next = mode === "MarkdownV2" ? "HTML" : mode === "HTML" ? "plain" : "nothing";
         console.warn(`[render] ${mode ?? "plain"} rejected, falling back to ${next}:`, String(err));
       }
     }
+    return null;
   }
 
-  /** Post the collected output; call once the turn is complete. */
-  async send(): Promise<void> {
-    for (const chunk of this.chunkRaw(this.buffer)) {
-      await this.sendOne(chunk);
+  /** Post text now. Returns the last message id sent, or null if nothing went out. */
+  async sendText(raw: string): Promise<number | null> {
+    let last: number | null = null;
+    for (const chunk of this.chunkRaw(raw)) {
+      const id = await this.sendOne(chunk);
+      if (id !== null) last = id;
     }
+    return last;
+  }
+
+  /**
+   * Rewrite an earlier message. Used for the live status line, which is edited
+   * many times per turn — edits don't notify, so this stays quiet.
+   */
+  async edit(messageId: number, raw: string): Promise<boolean> {
+    for (const { text, mode } of tiers(raw.slice(0, RAW_CHUNK))) {
+      if (!text || (mode && text.length > TG_LIMIT)) continue;
+      try {
+        await this.bot.api.editMessageText(this.chatId, messageId, text, {
+          ...(mode ? { parse_mode: mode } : {}),
+        });
+        return true;
+      } catch (err) {
+        const msg = String(err);
+        // Editing to identical content is a no-op, not a failure.
+        if (msg.includes("message is not modified")) return true;
+        console.warn(`[render] edit ${mode ?? "plain"} rejected:`, msg);
+      }
+    }
+    return false;
+  }
+
+  /** Post the buffered turn; call once the turn is complete. */
+  async send(): Promise<void> {
+    const raw = this.buffer;
     this.buffer = "";
+    await this.sendText(raw);
   }
 }

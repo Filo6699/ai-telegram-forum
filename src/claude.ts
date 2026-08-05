@@ -1,7 +1,10 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { Bot } from "grammy";
 import { cfg } from "./config.ts";
+import { fmtTokens, humanMs } from "./fmt.ts";
 import { TopicRenderer } from "./render.ts";
+import { TurnStatus } from "./status.ts";
+import { createTgChannel, TG_SEND_TOOL, TG_SYSTEM_PROMPT } from "./tg-tools.ts";
 
 export interface TurnResult {
   sessionId: string | undefined;
@@ -35,12 +38,14 @@ function permissionOptions() {
     };
   }
   // "auto": only ALLOWED_TOOLS are approved; everything else is denied. This
-  // never blocks waiting for input, which matters in a headless bot.
+  // never blocks waiting for input, which matters in a headless bot. Talking to
+  // the user is never gated — denying it would leave the topic silent.
+  const allowed = [...cfg.allowedTools, TG_SEND_TOOL];
   return {
     permissionMode: "default" as const,
-    allowedTools: cfg.allowedTools,
+    allowedTools: allowed,
     canUseTool: async (name: string, input: Record<string, unknown>) => {
-      if (!cfg.allowedTools.includes(name)) {
+      if (!allowed.includes(name)) {
         return { behavior: "deny" as const, message: `Tool ${name} not allowed` };
       }
       if (name === "Bash" && isDangerousBash(input)) {
@@ -65,10 +70,13 @@ function usageFromModels(modelUsage: Record<string, any> | undefined) {
 }
 
 /**
- * Run one conversational turn for a topic. Collects assistant text (and tool
- * activity markers), posts it to the topic once the turn is complete, and
- * returns the (possibly new) session id to persist. Pass `resume` to continue
- * an existing session.
+ * Run one conversational turn for a topic.
+ *
+ * The agent speaks for itself through `mcp__tg__send`, so nothing here relays
+ * the transcript: tool calls only bump the live status line, and assistant text
+ * is buffered purely as a safety net for a turn that ended without the agent
+ * ever calling the tool. Returns the (possibly new) session id to persist; pass
+ * `resume` to continue an existing session.
  */
 export async function runTurn(
   bot: Bot,
@@ -78,9 +86,17 @@ export async function runTurn(
   resume?: string | null,
 ): Promise<TurnResult> {
   const out = new TopicRenderer(bot, cfg.chatId, threadId);
+  const channel = createTgChannel(out);
+  const status = new TurnStatus(out);
+  await status.start();
+
   let sessionId: string | undefined = resume ?? undefined;
   let ok = false;
   const usage = { inTokens: 0, outTokens: 0, costUsd: 0 };
+
+  // Failures bypass the "did the agent speak?" logic below — they always get
+  // posted, even on a turn where the agent already sent messages.
+  let failure: string | null = null;
 
   // The SDK's own error is just an exit code; the reason (auth, terms, bad
   // model, …) only shows up on the child's stderr.
@@ -92,6 +108,8 @@ export async function runTurn(
       options: {
         cwd,
         model: cfg.model,
+        mcpServers: { tg: channel.server },
+        systemPrompt: { type: "preset", preset: "claude_code", append: TG_SYSTEM_PROMPT },
         stderr: (data: string) => {
           stderr += data;
           console.error(`[claude:${threadId}] ${data.trimEnd()}`);
@@ -105,11 +123,14 @@ export async function runTurn(
           if (msg.subtype === "init") sessionId = msg.session_id;
           break;
 
-        // Final assistant messages are the source of truth for the reply.
         case "assistant": {
           for (const block of msg.message.content) {
             if (block.type === "text") out.push(block.text);
-            else if (block.type === "tool_use") out.push(`\n\n🔧 ${block.name}\n`);
+            // Posting the reply is a tool call like any other, but it isn't
+            // work the user asked for — keep it out of the count.
+            else if (block.type === "tool_use" && block.name !== TG_SEND_TOOL) {
+              status.tool(block.name);
+            }
           }
           break;
         }
@@ -135,20 +156,38 @@ export async function runTurn(
             const text = (msg as any).result;
             if (typeof text === "string") out.push(text);
           }
-          if (!ok) {
-            out.push(`\n\n⚠️ ${msg.subtype}: ${(msg as any).error ?? ""}`);
-          }
+          if (!ok) failure = `⚠️ ${msg.subtype}: ${(msg as any).error ?? ""}`;
           break;
         }
       }
     }
   } catch (err) {
     const detail = stderr.trim().split("\n").filter(Boolean).slice(-5).join("\n");
-    out.push(`\n\n❌ ${String(err)}` + (detail ? `\n\n\`\`\`\n${detail}\n\`\`\`` : ""));
+    failure = `❌ ${String(err)}` + (detail ? `\n\n\`\`\`\n${detail}\n\`\`\`` : "");
     console.error(`[claude] turn failed on thread ${threadId}:`, err);
   } finally {
-    await out.send();
+    // The agent stayed silent — fall back to whatever text the turn produced,
+    // rather than leaving the topic with nothing but a summary.
+    if (channel.sent === 0) await out.send();
+    else out.clear();
+    if (failure) await out.sendText(failure);
+    await status.finish(summarize(ok && !failure, status, usage));
   }
 
   return { sessionId, ok, usage };
+}
+
+/** The one line that replaces the live status when a turn ends. */
+function summarize(
+  ok: boolean,
+  status: TurnStatus,
+  usage: { inTokens: number; outTokens: number; costUsd: number },
+): string {
+  const parts = [ok ? "✅" : "⚠️", humanMs(status.elapsedMs)];
+  if (status.toolCalls > 0) parts.push(`🔧 ${status.toolCalls}`);
+  if (usage.inTokens || usage.outTokens) {
+    parts.push(`${fmtTokens(usage.inTokens)}↑ ${fmtTokens(usage.outTokens)}↓`);
+  }
+  if (usage.costUsd > 0) parts.push(`$${usage.costUsd.toFixed(4)}`);
+  return parts.join(" · ");
 }

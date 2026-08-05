@@ -119,8 +119,11 @@ for that cwd. Defaults: close after 36h, delete 7 days after closing.
 | File | Role |
 |---|---|
 | `src/index.ts`  | bot entry, auth, routing by `message_thread_id` |
-| `src/claude.ts` | one turn via the Agent SDK, collected and posted to Telegram |
-| `src/render.ts` | posts a finished turn as one or more Telegram messages |
+| `src/claude.ts` | one turn via the Agent SDK |
+| `src/tg-tools.ts` | in-process MCP server: the agent's own `send` tool |
+| `src/status.ts` | live status line, then the turn summary |
+| `src/render.ts` | markdown → Telegram messages, with format fallback |
+| `src/fmt.ts`    | duration & token formatting |
 | `src/cwd.ts`    | parse `@alias` / `/path` prefix, make titles |
 | `src/db.ts`     | SQLite state (`node:sqlite`) |
 | `src/sweep.ts`  | close/delete idle topics, prune transcripts |
@@ -130,8 +133,10 @@ for that cwd. Defaults: close after 36h, delete 7 days after closing.
 
 - The Agent SDK has no clean per-turn abort yet; a runaway turn finishes or you
   restart the process. Consider adding `maxTurns` in `claude.ts` if needed.
-- Replies are posted only once a turn is complete — there is no token-by-token
-  streaming, so a long turn is silent until it finishes.
+- The agent decides when to write, through its `send` tool. A long turn isn't
+  silent — a live status line tracks tool activity and ends as a summary
+  (duration, tool calls, tokens, cost) — but there is no token-by-token
+  streaming of the reply itself.
 - Bots can't create groups — the forum itself is created by you, once.
 - Text only for now — images and file attachments aren't handled.
 

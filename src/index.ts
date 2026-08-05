@@ -2,6 +2,7 @@ import { Bot } from "grammy";
 import { cfg } from "./config.ts";
 import { runTurn } from "./claude.ts";
 import { resolveCwd, titleFrom } from "./cwd.ts";
+import { fmtTokens } from "./fmt.ts";
 import { startSweep } from "./sweep.ts";
 import {
   addUsage,
@@ -33,8 +34,7 @@ function withLock<T>(threadId: number, fn: () => Promise<T>): Promise<T> {
 const isLauncher = (threadId: number | undefined) =>
   threadId === undefined || threadId === cfg.launcherThreadId;
 
-const fmt = (n: number) =>
-  n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+const fmt = fmtTokens;
 
 function topicUsageText(t: Topic): string {
   return (
