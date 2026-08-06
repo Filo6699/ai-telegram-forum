@@ -1,9 +1,9 @@
 import { Bot } from "grammy";
 import { cfg } from "./config.ts";
 import { placeholderTitle, resolveCwd } from "./cwd.ts";
-import { bar, fmtTokens, humanUntil } from "./fmt.ts";
+import { fmtTokens } from "./fmt.ts";
 import { startHeartbeat } from "./heartbeat.ts";
-import { fetchPlanLimits, type PlanLimits } from "./limits.ts";
+import { fetchPlanLimits, planLimitsText } from "./limits.ts";
 import { registerPermissionButtons } from "./permission.ts";
 import { sessionFor } from "./session.ts";
 import { startSweep } from "./sweep.ts";
@@ -35,21 +35,6 @@ function totalsText(): string {
   );
 }
 
-/** The plan's own limits — what the CLI's `/usage` shows, not this bot's tally. */
-function planText(limits: PlanLimits | null): string {
-  if (!limits) return "_plan limits unavailable (API key or 3rd-party provider)_";
-  if (!limits.windows.length) return "_no plan limit windows reported_";
-  const plan = limits.subscription ? ` (${limits.subscription})` : "";
-  // The bars only line up inside a code block, so the whole meter goes in one.
-  const width = Math.max(...limits.windows.map((w) => w.label.length));
-  const lines = limits.windows.map((w) => {
-    const used = w.utilization === null ? "  ?" : `${Math.round(w.utilization)}%`.padStart(4);
-    const reset = w.resetsAt ? `  ⟳ ${humanUntil(w.resetsAt)}` : "";
-    return `${w.label.padEnd(width)}  ${bar(w.utilization)} ${used}${reset}`;
-  });
-  return [`⏳ *Claude plan${plan}*`, "```", ...lines, "```"].join("\n");
-}
-
 async function handleCommand(ctx: any, thread: number | undefined): Promise<boolean> {
   const cmd = ctx.message.text.trim().split(/\s+/)[0].toLowerCase();
   if (cmd !== "/usage" && cmd !== `/usage@${botUsername}`) return false;
@@ -67,7 +52,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
 
   let plan: string;
   try {
-    plan = planText(await fetchPlanLimits());
+    plan = planLimitsText(await fetchPlanLimits());
   } catch (err) {
     console.warn("[usage] plan limits failed:", String(err));
     plan = "_plan limits unavailable_";

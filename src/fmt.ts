@@ -18,9 +18,12 @@ export function humanUntil(iso: string): string {
 }
 
 /** Block-drawing meter: `███████░░░░░░░░`. Only lines up in a monospace block. */
-export function bar(pct: number | null, width = 14): string {
+export function bar(pct: number | null, width = 12): string {
   if (pct === null || !Number.isFinite(pct)) return "─".repeat(width);
-  const filled = Math.round((Math.min(100, Math.max(0, pct)) / 100) * width);
+  const clamped = Math.min(100, Math.max(0, pct));
+  let filled = Math.round((clamped / 100) * width);
+  // A window that has been touched at all should look touched.
+  if (filled === 0 && clamped > 0) filled = 1;
   return "█".repeat(filled) + "░".repeat(width - filled);
 }
 
