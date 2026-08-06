@@ -1,7 +1,8 @@
 import { Bot } from "grammy";
 import { cfg } from "./config.ts";
 import { placeholderTitle, resolveCwd } from "./cwd.ts";
-import { fmtTokens } from "./fmt.ts";
+import { fmtTokens, humanUntil } from "./fmt.ts";
+import { fetchPlanLimits, type PlanLimits } from "./limits.ts";
 import { registerPermissionButtons } from "./permission.ts";
 import { sessionFor } from "./session.ts";
 import { startSweep } from "./sweep.ts";
@@ -33,17 +34,48 @@ function totalsText(): string {
   );
 }
 
+/** The plan's own limits — what the CLI's `/usage` shows, not this bot's tally. */
+function planText(limits: PlanLimits | null): string {
+  if (!limits) return "_plan limits unavailable (API key or 3rd-party provider)_";
+  if (!limits.windows.length) return "_no plan limit windows reported_";
+  const plan = limits.subscription ? ` (${limits.subscription})` : "";
+  const lines = limits.windows.map((w) => {
+    const used = w.utilization === null ? "?" : `${Math.round(w.utilization)}%`;
+    const reset = w.resetsAt ? ` · resets in ${humanUntil(w.resetsAt)}` : "";
+    return `${w.label}: ${used}${reset}`;
+  });
+  return [`⏳ *Claude plan${plan}*`, ...lines].join("\n");
+}
+
 async function handleCommand(ctx: any, thread: number | undefined): Promise<boolean> {
   const cmd = ctx.message.text.trim().split(/\s+/)[0].toLowerCase();
   if (cmd !== "/usage" && cmd !== `/usage@${botUsername}`) return false;
 
   // In a task topic -> that topic's usage; in the launcher -> grand total.
   const t = thread !== undefined ? getTopic(thread) : undefined;
-  const text = t ? topicUsageText(t) : totalsText();
-  await ctx.reply(text, {
+  const local = t ? topicUsageText(t) : totalsText();
+
+  // Asking claude.ai for the plan limits can take a few seconds (and may have
+  // to start a child), so post the local tally first and fill the rest in.
+  const sent = await ctx.reply(`${local}\n\n⏳ _checking plan limits…_`, {
     message_thread_id: thread,
     parse_mode: "Markdown",
   });
+
+  let plan: string;
+  try {
+    plan = planText(await fetchPlanLimits());
+  } catch (err) {
+    console.warn("[usage] plan limits failed:", String(err));
+    plan = "_plan limits unavailable_";
+  }
+  try {
+    await ctx.api.editMessageText(ctx.chat.id, sent.message_id, `${local}\n\n${plan}`, {
+      parse_mode: "Markdown",
+    });
+  } catch (err) {
+    console.warn("[usage] editing the reply failed:", String(err));
+  }
   return true;
 }
 
@@ -125,7 +157,7 @@ async function main() {
   console.log(`[bot] permission=${cfg.permission} model=${cfg.model}`);
 
   await bot.api.setMyCommands([
-    { command: "usage", description: "Token/cost usage (this topic, or all in the launcher)" },
+    { command: "usage", description: "Tokens/cost here (or all in the launcher) + plan limits" },
   ]);
 
   registerPermissionButtons(bot);

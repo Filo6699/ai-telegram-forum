@@ -61,6 +61,11 @@ export class TopicSession {
     this.channel = createTgChannel(this.out);
   }
 
+  /** The running SDK query, if the child is up — for control-channel questions. */
+  get live(): Query | null {
+    return this.q;
+  }
+
   /** Hand a user message to the agent — now if it's idle, at its next step if not. */
   async send(text: string): Promise<void> {
     touch(this.threadId);
@@ -268,6 +273,15 @@ export function sessionFor(
   const s = new TopicSession(bot, topic.thread_id, topic.cwd, topic.session_id);
   live.set(topic.thread_id, s);
   return s;
+}
+
+/**
+ * Any topic's running query — the account's rate limits are the same whichever
+ * session asks, so `/usage` reuses a warm child instead of starting one.
+ */
+export function anyLiveQuery(): Query | null {
+  for (const s of live.values()) if (s.live) return s.live;
+  return null;
 }
 
 /** Drop the registry entry without touching the session itself. */

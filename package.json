@@ -29,6 +29,8 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
+    "telegramify": "tsx src/telegramify.ts",
+    "install-command": "tsx src/install-command.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

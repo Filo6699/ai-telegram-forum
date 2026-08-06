@@ -9,10 +9,13 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 |---|---|
 | `src/index.ts`  | bot entry, auth, routing by `message_thread_id` |
 | `src/session.ts` | one live SDK session per topic; turn lifecycle |
+| `src/telegramify.ts` | CLI: adopt an existing on-disk session into a new topic |
+| `src/install-command.ts` | writes the `/telegramify` slash command for Claude Code |
 | `src/permission.ts` | tool approval prompts + their inline buttons |
 | `src/claude.ts` | SDK options: model, permission policy, usage accounting |
 | `src/tg-tools.ts` | in-process MCP server — the agent's own `send` tool |
 | `src/status.ts` | the live status line / turn summary message |
+| `src/limits.ts` | plan rate limits (5-hour / weekly) behind `/usage` |
 | `src/render.ts` | markdown → topic messages, with format fallback |
 | `src/fmt.ts`    | duration & token formatting |
 | `src/html.ts`   | markdown → Telegram HTML (fallback when MarkdownV2 fails) |
@@ -27,6 +30,9 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 npm start          # run
 npm run dev        # watch mode
 npm run typecheck  # tsc --noEmit — must be clean before you commit
+
+npm run install-command          # install /telegramify into ~/.claude/commands
+npm run telegramify -- --dry-run # adopt the current terminal session into a topic
 ```
 
 ## Rules
@@ -49,6 +55,10 @@ npm run typecheck  # tsc --noEmit — must be clean before you commit
   through the message handler's gate, so every handler must check
   `ALLOWED_USER_ID` itself. A permission prompt must always settle — button,
   timeout, or session end — or the tool call waits forever.
+- **Adoption binds, it doesn't copy.** `/telegramify` only writes a topic row
+  pointing at a session id that already exists on disk — never replay or import
+  a transcript. One session id belongs to at most one topic, or the terminal and
+  the bot resume from the same file and clobber each other's tail.
 - Keep it dependency-light and single-user. Don't add a runtime dependency or
   multi-user auth without discussing the design first.
 - Don't touch `.env` or `data/` — both are git-ignored and hold real state.
