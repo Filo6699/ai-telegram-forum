@@ -17,6 +17,13 @@ export function humanUntil(iso: string): string {
   return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
+/** Block-drawing meter: `███████░░░░░░░░`. Only lines up in a monospace block. */
+export function bar(pct: number | null, width = 14): string {
+  if (pct === null || !Number.isFinite(pct)) return "─".repeat(width);
+  const filled = Math.round((Math.min(100, Math.max(0, pct)) / 100) * width);
+  return "█".repeat(filled) + "░".repeat(width - filled);
+}
+
 /** Compact token count: `812`, `12.3k`. */
 export function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);

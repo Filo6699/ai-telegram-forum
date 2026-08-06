@@ -68,4 +68,7 @@ export const cfg = {
   permissionTimeoutMs: Number(process.env.PERMISSION_TIMEOUT_MINUTES ?? 10) * 60_000,
 
   dbPath: process.env.DB_PATH ?? "./data/state.db",
+  // Heartbeat file the running bot keeps warm; `/telegramify` won't adopt a
+  // session into a forum nobody is listening to.
+  pidPath: process.env.PID_PATH ?? "./data/bot.pid",
 } as const;

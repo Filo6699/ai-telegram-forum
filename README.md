@@ -103,6 +103,11 @@ Then, inside any Claude Code session:
 It creates a topic named after the session and prints its link. Keep writing
 there and the same session continues, with its full history.
 
+**The bot has to be running.** Adoption is refused when it isn't — a topic
+nobody polls would just swallow your messages. The running bot keeps
+`PID_PATH` (`./data/bot.pid`) warm, and `/telegramify` checks that heartbeat
+before touching Telegram.
+
 Straight from the shell, without the slash command:
 
 ```bash
@@ -168,6 +173,7 @@ finish.
 | `src/index.ts`  | bot entry, auth, routing by `message_thread_id` |
 | `src/session.ts` | one live Agent SDK session per topic |
 | `src/telegramify.ts` | adopt an existing terminal session into a topic |
+| `src/heartbeat.ts` | is the broker running? (written by the bot, read by the CLI) |
 | `src/install-command.ts` | install the `/telegramify` slash command |
 | `src/permission.ts` | tool approval prompts (inline buttons) |
 | `src/claude.ts` | SDK options: model, permissions, usage accounting |

@@ -16,6 +16,7 @@ import { Api } from "grammy";
 import { cfg } from "./config.ts";
 import { isPendingTitle, placeholderTitle } from "./cwd.ts";
 import { createTopic, findBySession, setStatus } from "./db.ts";
+import { brokerPid } from "./heartbeat.ts";
 
 interface Args {
   session?: string;
@@ -78,6 +79,16 @@ function topicLink(threadId: number): string {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+
+  // A topic is only worth creating if something is polling for it. Without the
+  // broker the session would look adopted and answer nothing.
+  if (brokerPid() === null) {
+    throw new Error(
+      "the claude-tg-forum broker isn't running — start it with `npm start` " +
+        `in ${process.cwd()} and try again`,
+    );
+  }
+
   const info = await resolveSession(args);
   const cwd = args.cwd ?? info.cwd ?? process.cwd();
   const api = new Api(cfg.token);

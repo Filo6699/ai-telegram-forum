@@ -66,11 +66,11 @@ async function read(q: Asker): Promise<PlanLimits | null> {
       windows.push({ label, utilization: w.utilization ?? null, resetsAt: w.resets_at ?? null });
     }
   };
-  add("5-hour", r.five_hour);
-  add("weekly", r.seven_day);
-  add("weekly · Opus", r.seven_day_opus);
-  add("weekly · Sonnet", r.seven_day_sonnet);
-  for (const m of r.model_scoped ?? []) add(`weekly · ${m.display_name}`, m);
+  add("Session (5h)", r.five_hour);
+  add("Week (all)", r.seven_day);
+  add("Week (Opus)", r.seven_day_opus);
+  add("Week (Sonnet)", r.seven_day_sonnet);
+  for (const m of r.model_scoped ?? []) add(`Week (${m.display_name})`, m);
 
   return { subscription: usage.subscription_type ?? null, windows };
 }
