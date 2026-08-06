@@ -15,6 +15,7 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 | `src/claude.ts` | SDK options: model, permission policy, usage accounting |
 | `src/tg-tools.ts` | in-process MCP server — the agent's own `send` tool |
 | `src/status.ts` | the live status line / turn summary message |
+| `src/limits.ts` | plan rate limits (5-hour / weekly) behind `/usage` |
 | `src/render.ts` | markdown → topic messages, with format fallback |
 | `src/fmt.ts`    | duration & token formatting |
 | `src/html.ts`   | markdown → Telegram HTML (fallback when MarkdownV2 fails) |

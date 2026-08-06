@@ -78,6 +78,13 @@ Everything happens by messaging the **New session** topic (or the General topic)
 Then just keep chatting **inside that topic** — each message resumes the same
 Claude session. Writing into a closed (archived) topic reopens it.
 
+`/usage` reports the tokens and cost spent in that topic (in the launcher: the
+totals across every topic), followed by your Claude plan's own rate-limit
+windows — the 5-hour and weekly percentages the CLI's `/usage` shows, with the
+time until each resets. Those come from claude.ai, so they cover all your Claude
+Code activity, not just this bot; on an API-key or Bedrock/Vertex setup there
+are no plan limits and that part is left out.
+
 ## Moving a terminal session to Telegram (`/telegramify`)
 
 A session you started in the terminal already lives on disk, so adopting it is
@@ -166,6 +173,7 @@ finish.
 | `src/claude.ts` | SDK options: model, permissions, usage accounting |
 | `src/tg-tools.ts` | in-process MCP server: the agent's own `send` tool |
 | `src/status.ts` | live status line, then the turn summary |
+| `src/limits.ts` | plan rate limits (5-hour / weekly) behind `/usage` |
 | `src/render.ts` | markdown → Telegram messages, with format fallback |
 | `src/fmt.ts`    | duration & token formatting |
 | `src/cwd.ts`    | parse `@alias` / `/path` prefix, make titles |
