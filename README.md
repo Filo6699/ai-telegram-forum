@@ -80,8 +80,8 @@ Claude session. Writing into a closed (archived) topic reopens it.
 
 `/usage` reports the tokens and cost spent in that topic (in the launcher: the
 totals across every topic), followed by your Claude plan's own rate-limit
-windows — the 5-hour and weekly percentages the CLI's `/usage` shows, with the
-time until each resets. Those come from claude.ai, so they cover all your Claude
+windows — the 5-hour and weekly meters the CLI's `/usage` shows, drawn as bars
+with the time until each resets. Those come from claude.ai, so they cover all your Claude
 Code activity, not just this bot; on an API-key or Bedrock/Vertex setup there
 are no plan limits and that part is left out.
 
