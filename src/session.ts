@@ -1,8 +1,14 @@
-import { query, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import {
+  getSessionInfo,
+  query,
+  type Query,
+  type SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import type { Bot } from "grammy";
 import { queryOptions, readUsage, type Usage } from "./claude.ts";
 import { cfg } from "./config.ts";
-import { addUsage, setSession, touch } from "./db.ts";
+import { isPendingTitle } from "./cwd.ts";
+import { addUsage, getTopic, setSession, setTitle, touch } from "./db.ts";
 import { fmtTokens, humanMs } from "./fmt.ts";
 import { clearPermissions } from "./permission.ts";
 import { TopicRenderer } from "./render.ts";
@@ -133,7 +139,30 @@ export class TopicSession {
     addUsage(this.threadId, usage);
     if (this.sessionId) setSession(this.threadId, this.sessionId);
     await status?.finish(summarize(ok && !failure, status, usage));
+    await this.retitle();
     this.armIdleTimer();
+  }
+
+  /**
+   * Swap the launch placeholder for the title Claude generated for the session.
+   * It only exists once the first turn is on disk, so this is tried after every
+   * turn until it lands.
+   */
+  private async retitle(): Promise<void> {
+    if (!this.sessionId) return;
+    const topic = getTopic(this.threadId);
+    if (!topic || !isPendingTitle(topic.title)) return;
+    try {
+      const info = await getSessionInfo(this.sessionId);
+      const name = info?.summary?.trim();
+      // Until a title is generated, `summary` is just the first prompt back.
+      if (!name || name === info?.firstPrompt?.trim()) return;
+      const title = name.slice(0, 128);
+      await this.bot.api.editForumTopic(cfg.chatId, this.threadId, { name: title });
+      setTitle(this.threadId, title);
+    } catch (err) {
+      console.warn(`[session] retitling topic ${this.threadId} failed:`, String(err));
+    }
   }
 
   private async run(): Promise<void> {

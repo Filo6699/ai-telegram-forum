@@ -35,9 +35,23 @@ export function resolveCwd(text: string): Resolved {
   return { cwd: cfg.defaultCwd, prompt: trimmed };
 }
 
+/**
+ * Marks a title as still provisional: the topic is named from the first prompt
+ * until Claude generates its own session title, which then replaces it.
+ */
+export const PENDING_TITLE_MARK = "⏳ ";
+
+/** Is this title still the placeholder we set at launch? */
+export const isPendingTitle = (title: string): boolean =>
+  title.startsWith(PENDING_TITLE_MARK);
+
 /** Short, human-friendly topic title derived from the first prompt. */
 export function titleFrom(prompt: string): string {
   const firstLine = prompt.split("\n")[0]?.trim() ?? "session";
   const clipped = firstLine.slice(0, 60);
   return clipped.length ? clipped : "session";
 }
+
+/** The provisional title a topic carries until Claude names the session. */
+export const placeholderTitle = (prompt: string): string =>
+  (PENDING_TITLE_MARK + titleFrom(prompt)).slice(0, 128);

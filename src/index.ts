@@ -1,6 +1,6 @@
 import { Bot } from "grammy";
 import { cfg } from "./config.ts";
-import { resolveCwd, titleFrom } from "./cwd.ts";
+import { placeholderTitle, resolveCwd } from "./cwd.ts";
 import { fmtTokens } from "./fmt.ts";
 import { registerPermissionButtons } from "./permission.ts";
 import { sessionFor } from "./session.ts";
@@ -70,7 +70,7 @@ bot.on("message:text", async (ctx) => {
   // ---- A) Launcher: spin up a new topic + session -----------------------
   if (isLauncher(thread)) {
     const { cwd, prompt } = resolveCwd(text);
-    const title = titleFrom(prompt);
+    const title = placeholderTitle(prompt);
 
     const topic = await ctx.api.createForumTopic(cfg.chatId, title);
     const tid = topic.message_thread_id;
@@ -79,6 +79,14 @@ bot.on("message:text", async (ctx) => {
     await ctx.reply(`→ «${title}»  (cwd: ${cwd})`, {
       message_thread_id: cfg.launcherThreadId,
     });
+
+    // The launcher message lives in another topic — repeat it here so the
+    // thread reads as a whole conversation.
+    try {
+      await ctx.api.sendMessage(cfg.chatId, prompt, { message_thread_id: tid });
+    } catch (err) {
+      console.warn(`[launch] echoing the prompt into ${tid} failed:`, String(err));
+    }
 
     await sessionFor(bot, { thread_id: tid, cwd, session_id: null }).send(prompt);
     return;

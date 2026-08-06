@@ -71,6 +71,7 @@ const stmts = {
     "UPDATE topics SET last_activity = ?, status = 'active' WHERE thread_id = ?",
   ),
   setStatus: db.prepare("UPDATE topics SET status = ? WHERE thread_id = ?"),
+  setTitle: db.prepare("UPDATE topics SET title = ? WHERE thread_id = ?"),
   del: db.prepare("DELETE FROM topics WHERE thread_id = ?"),
   staleActive: db.prepare(
     "SELECT * FROM topics WHERE status = 'active' AND last_activity < ?",
@@ -119,6 +120,10 @@ export function touch(threadId: number): void {
 
 export function setStatus(threadId: number, status: TopicStatus): void {
   stmts.setStatus.run(status, threadId);
+}
+
+export function setTitle(threadId: number, title: string): void {
+  stmts.setTitle.run(title, threadId);
 }
 
 export function deleteTopic(threadId: number): void {
