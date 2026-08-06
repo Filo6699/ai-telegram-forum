@@ -78,6 +78,36 @@ Everything happens by messaging the **New session** topic (or the General topic)
 Then just keep chatting **inside that topic** — each message resumes the same
 Claude session. Writing into a closed (archived) topic reopens it.
 
+## Moving a terminal session to Telegram (`/telegramify`)
+
+A session you started in the terminal already lives on disk, so adopting it is
+just a matter of binding a topic to its id — nothing is copied or replayed.
+
+```bash
+npm run install-command      # writes ~/.claude/commands/telegramify.md, once
+```
+
+Then, inside any Claude Code session:
+
+```
+/telegramify
+```
+
+It creates a topic named after the session and prints its link. Keep writing
+there and the same session continues, with its full history.
+
+Straight from the shell, without the slash command:
+
+```bash
+npm run telegramify -- --session <uuid>      # a specific session, found anywhere
+npm run telegramify -- --cwd /srv/app        # the newest session in that project
+npm run telegramify -- --dry-run             # show what it would adopt
+```
+
+> Don't keep talking to the same session in both places — the terminal and the
+> bot would resume from the same transcript and overwrite each other's tail.
+> Adopting a session twice is safe though: you get the existing topic back.
+
 ## Working directories
 
 `DEFAULT_CWD` is used unless the launcher message starts with:
@@ -130,6 +160,8 @@ finish.
 |---|---|
 | `src/index.ts`  | bot entry, auth, routing by `message_thread_id` |
 | `src/session.ts` | one live Agent SDK session per topic |
+| `src/telegramify.ts` | adopt an existing terminal session into a topic |
+| `src/install-command.ts` | install the `/telegramify` slash command |
 | `src/permission.ts` | tool approval prompts (inline buttons) |
 | `src/claude.ts` | SDK options: model, permissions, usage accounting |
 | `src/tg-tools.ts` | in-process MCP server: the agent's own `send` tool |

@@ -6,6 +6,17 @@ export function humanMs(ms: number): string {
   return `${m}m ${s % 60}s`;
 }
 
+/** Coarse countdown to a timestamp: `4d 2h`, `1h 20m`, `9m`, `now`. */
+export function humanUntil(iso: string): string {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return "now";
+  const m = Math.floor(ms / 60_000);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
 /** Compact token count: `812`, `12.3k`. */
 export function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);

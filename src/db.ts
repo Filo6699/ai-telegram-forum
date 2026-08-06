@@ -60,6 +60,7 @@ for (const col of [
 
 const stmts = {
   get: db.prepare("SELECT * FROM topics WHERE thread_id = ?"),
+  bySession: db.prepare("SELECT * FROM topics WHERE session_id = ?"),
   insert: db.prepare(
     `INSERT INTO topics (thread_id, session_id, cwd, title, status, last_activity, created_at)
      VALUES (?, ?, ?, ?, 'active', ?, ?)`,
@@ -101,13 +102,20 @@ export function getTopic(threadId: number): Topic | undefined {
   return stmts.get.get(threadId) as unknown as Topic | undefined;
 }
 
+/** The topic already bound to a Claude session id, if any. */
+export function findBySession(sessionId: string): Topic | undefined {
+  return stmts.bySession.get(sessionId) as unknown as Topic | undefined;
+}
+
 export function createTopic(t: {
   threadId: number;
   cwd: string;
   title: string;
+  /** Set when adopting a session that already exists on disk (`/telegramify`). */
+  sessionId?: string | null;
 }): void {
   const now = Date.now();
-  stmts.insert.run(t.threadId, null, t.cwd, t.title, now, now);
+  stmts.insert.run(t.threadId, t.sessionId ?? null, t.cwd, t.title, now, now);
 }
 
 export function setSession(threadId: number, sessionId: string): void {
