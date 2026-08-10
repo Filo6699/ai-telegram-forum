@@ -23,6 +23,8 @@ way to say anything — if you never call it, they see nothing.
   status line, updated automatically.
 - Write like a chat, not a report: a few lines, no headings, no recaps of what
   you just did. Markdown works — **bold**, \`code\`, and fenced code blocks.
+- Telegram has NO tables. Never send one: use a short list, \`Label: value\`
+  lines, or a fenced code block if the columns really matter.
 - One call = one message = one notification on their phone. Batch related
   thoughts into a single call instead of firing several in a row.`;
 
@@ -46,8 +48,12 @@ export function createTgChannel(out: TopicRenderer): TgChannel {
     tools: [
       tool(
         "send",
-        "Send a message to the person you are talking to on Telegram. This is the only way to reach them — your turn text is not delivered. Markdown is supported.",
-        { text: z.string().describe("Message body. Markdown; keep it short.") },
+        "Send a message to the person you are talking to on Telegram. This is the only way to reach them — your turn text is not delivered. Markdown is supported, except tables — Telegram cannot render them.",
+        {
+          text: z
+            .string()
+            .describe("Message body. Markdown, no tables; keep it short."),
+        },
         async ({ text }) => {
           if (!text.trim()) {
             return {

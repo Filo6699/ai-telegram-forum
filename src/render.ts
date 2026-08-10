@@ -1,6 +1,7 @@
 import type { Bot } from "grammy";
 import telegramify from "telegramify-markdown";
 import { toTelegramHtml } from "./html.js";
+import { flattenTables } from "./tables.js";
 
 const TG_LIMIT = 4096;
 const RAW_CHUNK = 2800; // raw markdown per message; formatted stays under TG_LIMIT
@@ -122,7 +123,7 @@ export class TopicRenderer {
   /** Post text now. Returns the last message id sent, or null if nothing went out. */
   async sendText(raw: string): Promise<number | null> {
     let last: number | null = null;
-    for (const chunk of this.chunkRaw(raw)) {
+    for (const chunk of this.chunkRaw(flattenTables(raw))) {
       const id = await this.sendOne(chunk);
       if (id !== null) last = id;
     }
@@ -134,7 +135,7 @@ export class TopicRenderer {
    * many times per turn — edits don't notify, so this stays quiet.
    */
   async edit(messageId: number, raw: string): Promise<boolean> {
-    for (const { text, mode } of tiers(raw.slice(0, RAW_CHUNK))) {
+    for (const { text, mode } of tiers(flattenTables(raw).slice(0, RAW_CHUNK))) {
       if (!text || (mode && text.length > TG_LIMIT)) continue;
       try {
         await this.bot.api.editMessageText(this.chatId, messageId, text, {
