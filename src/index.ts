@@ -83,10 +83,6 @@ bot.on("message:text", async (ctx) => {
     return;
   }
 
-  // Receipt ack. A message sent mid-turn won't be answered until the agent
-  // reaches its next step, so say "seen" right away.
-  void ctx.react("👀").catch(() => {});
-
   // ---- A) Launcher: spin up a new topic + session -----------------------
   if (isLauncher(thread)) {
     const { cwd, prompt } = resolveCwd(text);
