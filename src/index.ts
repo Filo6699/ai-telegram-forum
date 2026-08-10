@@ -1,5 +1,7 @@
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Bot } from "grammy";
 import { cfg } from "./config.ts";
+import { fetchImage, isSupportedImage, type ImagePart } from "./media.ts";
 import { placeholderTitle, resolveCwd } from "./cwd.ts";
 import { fmtTokens } from "./fmt.ts";
 import { startHeartbeat } from "./heartbeat.ts";
@@ -69,24 +71,26 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
 
 let botUsername = "";
 
-bot.on("message:text", async (ctx) => {
-  // Single-user gate: silently ignore anyone else.
-  if (ctx.from?.id !== cfg.allowedUserId) return;
-  // Ignore messages outside the configured forum.
-  if (ctx.chat.id !== cfg.chatId) return;
-  const thread = ctx.message.message_thread_id;
-  const text = ctx.message.text;
+/** The message as the agent sees it: text alone, or images plus their caption. */
+function contentOf(text: string, images: ImagePart[]): SDKUserMessage["message"]["content"] {
+  if (!images.length) return text;
+  const blocks: Exclude<SDKUserMessage["message"]["content"], string> = images.map((img) => ({
+    type: "image",
+    source: { type: "base64", media_type: img.mediaType as any, data: img.data },
+  }));
+  // An empty text block is rejected by the API — a caption-less photo is fine.
+  if (text) blocks.push({ type: "text", text });
+  return blocks;
+}
 
-  // Commands (e.g. /usage) are handled here; other /… messages are ignored.
-  if (text.startsWith("/")) {
-    await handleCommand(ctx, thread);
-    return;
-  }
+/** Route one inbound user message (with any images already downloaded). */
+async function route(ctx: any, text: string, images: ImagePart[]): Promise<void> {
+  const thread: number | undefined = ctx.message.message_thread_id;
 
   // ---- A) Launcher: spin up a new topic + session -----------------------
   if (isLauncher(thread)) {
     const { cwd, prompt } = resolveCwd(text);
-    const title = placeholderTitle(prompt);
+    const title = placeholderTitle(prompt || "image");
 
     const topic = await ctx.api.createForumTopic(cfg.chatId, title);
     const tid = topic.message_thread_id;
@@ -97,14 +101,23 @@ bot.on("message:text", async (ctx) => {
     });
 
     // The launcher message lives in another topic — repeat it here so the
-    // thread reads as a whole conversation.
+    // thread reads as a whole conversation. A photo is copied verbatim;
+    // plain text is re-sent without its cwd prefix.
     try {
-      await ctx.api.sendMessage(cfg.chatId, prompt, { message_thread_id: tid });
+      if (images.length) {
+        await ctx.api.copyMessage(cfg.chatId, cfg.chatId, ctx.message.message_id, {
+          message_thread_id: tid,
+        });
+      } else {
+        await ctx.api.sendMessage(cfg.chatId, prompt, { message_thread_id: tid });
+      }
     } catch (err) {
       console.warn(`[launch] echoing the prompt into ${tid} failed:`, String(err));
     }
 
-    await sessionFor(bot, { thread_id: tid, cwd, session_id: null }).send(prompt);
+    await sessionFor(bot, { thread_id: tid, cwd, session_id: null }).send(
+      contentOf(prompt, images),
+    );
     return;
   }
 
@@ -124,7 +137,54 @@ bot.on("message:text", async (ctx) => {
 
   // The session takes it from here: if a turn is already running, this lands
   // in front of the agent at its next step rather than waiting in a queue.
-  await sessionFor(bot, t).send(text);
+  await sessionFor(bot, t).send(contentOf(text, images));
+}
+
+/** Single-user gate + right-forum check, shared by every message handler. */
+const mine = (ctx: any): boolean =>
+  ctx.from?.id === cfg.allowedUserId && ctx.chat.id === cfg.chatId;
+
+bot.on("message:text", async (ctx) => {
+  if (!mine(ctx)) return;
+  const text = ctx.message.text;
+
+  // Commands (e.g. /usage) are handled here; other /… messages are ignored.
+  if (text.startsWith("/")) {
+    await handleCommand(ctx, ctx.message.message_thread_id);
+    return;
+  }
+
+  await route(ctx, text, []);
+});
+
+/**
+ * Photos, and documents Telegram tags as an image (what "send as file" makes).
+ * An album arrives as one message per photo; each is its own turn input, which
+ * the session hands to the agent together at its next step.
+ */
+bot.on(["message:photo", "message:document"], async (ctx) => {
+  if (!mine(ctx)) return;
+
+  const doc = ctx.message.document;
+  // The last photo size is the largest one Telegram kept.
+  const fileId = doc ? doc.file_id : ctx.message.photo?.at(-1)?.file_id;
+  if (!fileId) return;
+  if (doc && !isSupportedImage(doc.mime_type)) return; // not an image — nothing to pass on
+
+  let image: ImagePart;
+  try {
+    image = await fetchImage(ctx.api, fileId, doc?.mime_type);
+  } catch (err) {
+    console.warn("[media] fetching the image failed:", String(err));
+    await ctx
+      .reply(`⚠️ couldn't fetch that image: ${String(err)}`, {
+        message_thread_id: ctx.message.message_thread_id,
+      })
+      .catch(() => {});
+    return;
+  }
+
+  await route(ctx, ctx.message.caption?.trim() ?? "", [image]);
 });
 
 bot.catch((err) => {

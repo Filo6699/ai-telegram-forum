@@ -66,13 +66,16 @@ export class TopicSession {
     return this.q;
   }
 
-  /** Hand a user message to the agent — now if it's idle, at its next step if not. */
-  async send(text: string): Promise<void> {
+  /**
+   * Hand a user message to the agent — now if it's idle, at its next step if
+   * not. `content` is plain text, or the block list a message with images needs.
+   */
+  async send(content: SDKUserMessage["message"]["content"]): Promise<void> {
     touch(this.threadId);
     this.armIdleTimer();
     this.push({
       type: "user",
-      message: { role: "user", content: text },
+      message: { role: "user", content },
       parent_tool_use_id: null,
     });
     if (!this.running) void this.run();

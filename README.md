@@ -78,6 +78,11 @@ Everything happens by messaging the **New session** topic (or the General topic)
 Then just keep chatting **inside that topic** — each message resumes the same
 Claude session. Writing into a closed (archived) topic reopens it.
 
+**Pictures work too.** Send a photo (or an image sent as a file — JPEG, PNG,
+GIF, WebP) with an optional caption, in the launcher or inside a topic, and the
+agent sees the image itself alongside the caption. An album arrives as several
+messages; the agent gets them together at its next step.
+
 `/usage` reports the tokens and cost spent in that topic (in the launcher: the
 totals across every topic), followed by your Claude plan's own rate-limit
 windows — the 5-hour and weekly meters the CLI's `/usage` shows, drawn as bars
@@ -182,6 +187,7 @@ finish.
 | `src/limits.ts` | plan rate limits (5-hour / weekly) behind `/usage` |
 | `src/render.ts` | markdown → Telegram messages, with format fallback |
 | `src/fmt.ts`    | duration & token formatting |
+| `src/media.ts`  | download an inbound photo for the agent's message |
 | `src/cwd.ts`    | parse `@alias` / `/path` prefix, make titles |
 | `src/db.ts`     | SQLite state (`node:sqlite`) |
 | `src/sweep.ts`  | close/delete idle topics, prune transcripts |
