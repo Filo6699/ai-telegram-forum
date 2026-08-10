@@ -78,6 +78,10 @@ export function queryOptions(opts: {
     mcpServers: { tg: opts.channel.server },
     systemPrompt: { type: "preset", preset: "claude_code", append: TG_SYSTEM_PROMPT },
     stderr: opts.onStderr,
+    // The SDK would stamp every record with `entrypoint: "sdk-ts"`, and the CLI's
+    // /resume picker hides those — a topic's session would be invisible in the
+    // terminal it runs in. Claim "cli" so the picker lists it like any other.
+    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" } as Record<string, string>,
     ...(opts.resume ? { resume: opts.resume } : {}),
     ...permissionOptions(opts.bot, opts.threadId),
   };
