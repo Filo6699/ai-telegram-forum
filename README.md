@@ -90,6 +90,11 @@ with the time until each resets. Those come from claude.ai, so they cover all yo
 Code activity, not just this bot; on an API-key or Bedrock/Vertex setup there
 are no plan limits and that part is left out.
 
+`/resume`, inside a topic, hands back the one line that continues that same
+session in a terminal — `cd <the topic's cwd> && claude --resume <session id>`.
+`/id` gives just the session id. Both only work inside a session topic, and
+only once the first turn has recorded a session id.
+
 ## Moving a terminal session to Telegram (`/telegramify`)
 
 A session you started in the terminal already lives on disk, so adopting it is

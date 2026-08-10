@@ -37,9 +37,62 @@ function totalsText(): string {
   );
 }
 
+/** Shell-quote a path so the pasted command survives spaces and quotes. */
+function shq(s: string): string {
+  return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * `/resume` and `/id` only make sense inside a task topic — the launcher has no
+ * session of its own. Returns the topic, or replies with why it can't.
+ */
+async function sessionTopic(ctx: any, thread: number | undefined): Promise<Topic | undefined> {
+  const t = thread !== undefined && !isLauncher(thread) ? getTopic(thread) : undefined;
+  if (!t) {
+    await ctx.reply("⚠️ run this inside a session topic, not here.", {
+      message_thread_id: thread,
+    });
+    return;
+  }
+  if (!t.session_id) {
+    await ctx.reply("⚠️ this topic has no session id yet — send a message first.", {
+      message_thread_id: thread,
+    });
+    return;
+  }
+  return t;
+}
+
 async function handleCommand(ctx: any, thread: number | undefined): Promise<boolean> {
-  const cmd = ctx.message.text.trim().split(/\s+/)[0].toLowerCase();
-  if (cmd !== "/usage" && cmd !== `/usage@${botUsername}`) return false;
+  const raw = ctx.message.text.trim().split(/\s+/)[0].toLowerCase();
+  // `/cmd@thisbot` is the same command; anything addressed to another bot isn't.
+  const at = raw.indexOf("@");
+  if (at !== -1 && raw.slice(at + 1) !== botUsername.toLowerCase()) return false;
+  const cmd = at === -1 ? raw : raw.slice(0, at);
+
+  if (cmd === "/id") {
+    const t = await sessionTopic(ctx, thread);
+    if (t) {
+      await ctx.reply(`\`${t.session_id}\``, {
+        message_thread_id: thread,
+        parse_mode: "Markdown",
+      });
+    }
+    return true;
+  }
+
+  if (cmd === "/resume") {
+    const t = await sessionTopic(ctx, thread);
+    if (t) {
+      await ctx.reply(`\`\`\`\ncd ${shq(t.cwd)} && claude --resume ${t.session_id}\n\`\`\``, {
+        message_thread_id: thread,
+        parse_mode: "Markdown",
+      });
+    }
+    return true;
+  }
+
+  if (cmd !== "/usage") return false;
 
   // In a task topic -> that topic's usage; in the launcher -> grand total.
   const t = thread !== undefined ? getTopic(thread) : undefined;
@@ -202,6 +255,8 @@ async function main() {
 
   await bot.api.setMyCommands([
     { command: "usage", description: "Tokens/cost here (or all in the launcher) + plan limits" },
+    { command: "resume", description: "Shell command to continue this session in a terminal" },
+    { command: "id", description: "Claude session id of this topic" },
   ]);
 
   registerPermissionButtons(bot);
