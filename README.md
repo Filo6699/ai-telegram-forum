@@ -90,6 +90,11 @@ with the time until each resets. Those come from claude.ai, so they cover all yo
 Code activity, not just this bot; on an API-key or Bedrock/Vertex setup there
 are no plan limits and that part is left out.
 
+`/stop`, inside a topic, interrupts the turn running there — the running tool is
+aborted, any permission prompt still open is denied, and messages you sent while
+it was working are dropped. The session itself stays up, so the next message
+carries on from where it stopped.
+
 `/resume`, inside a topic, hands back the one line that continues that same
 session in a terminal — `cd <the topic's cwd> && claude --resume <session id>`.
 `/id` gives just the session id. Both only work inside a session topic, and

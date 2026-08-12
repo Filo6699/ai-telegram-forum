@@ -7,7 +7,7 @@ import { fmtTokens } from "./fmt.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { fetchPlanLimits, planLimitsText } from "./limits.ts";
 import { registerPermissionButtons } from "./permission.ts";
-import { sessionFor } from "./session.ts";
+import { liveSession, sessionFor } from "./session.ts";
 import { startSweep } from "./sweep.ts";
 import { createTopic, getTopic, setStatus, totals, type Topic } from "./db.ts";
 
@@ -88,6 +88,24 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
         message_thread_id: thread,
         parse_mode: "Markdown",
       });
+    }
+    return true;
+  }
+
+  if (cmd === "/stop") {
+    const s = thread !== undefined && !isLauncher(thread) ? liveSession(thread) : undefined;
+    let stopped = false;
+    if (s) {
+      try {
+        stopped = await s.interrupt();
+      } catch (err) {
+        console.warn(`[stop] interrupting ${thread} failed:`, String(err));
+        await ctx.reply(`⚠️ couldn't stop it: ${String(err)}`, { message_thread_id: thread });
+        return true;
+      }
+    }
+    if (!stopped) {
+      await ctx.reply("⚠️ nothing running here.", { message_thread_id: thread });
     }
     return true;
   }
@@ -255,6 +273,7 @@ async function main() {
 
   await bot.api.setMyCommands([
     { command: "usage", description: "Tokens/cost here (or all in the launcher) + plan limits" },
+    { command: "stop", description: "Interrupt the turn running in this topic" },
     { command: "resume", description: "Shell command to continue this session in a terminal" },
     { command: "id", description: "Claude session id of this topic" },
   ]);

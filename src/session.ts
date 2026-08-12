@@ -10,7 +10,7 @@ import { cfg } from "./config.ts";
 import { isPendingTitle } from "./cwd.ts";
 import { addUsage, getTopic, setSession, setTitle, touch } from "./db.ts";
 import { fmtTokens, humanMs } from "./fmt.ts";
-import { clearPermissions } from "./permission.ts";
+import { clearPermissions, denyPending } from "./permission.ts";
 import { TopicRenderer } from "./render.ts";
 import { TurnStatus } from "./status.ts";
 import { createTgChannel, TG_SEND_TOOL, type TgChannel } from "./tg-tools.ts";
@@ -47,6 +47,7 @@ export class TopicSession {
   private turnActive = false;
   private usage = zeroUsage();
   private failure: string | null = null;
+  private stopped = false;
   private stderr = "";
 
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -80,6 +81,21 @@ export class TopicSession {
     });
     if (!this.running) void this.run();
     await this.beginTurn();
+  }
+
+  /**
+   * Abort the running turn without ending the session — the child stays up and
+   * the next message continues the same conversation. Messages that arrived
+   * while the turn ran are dropped: stop means stop. Returns false when there
+   * was nothing to interrupt.
+   */
+  async interrupt(): Promise<boolean> {
+    if (!this.q || !this.turnActive) return false;
+    this.stopped = true;
+    this.pending = [];
+    denyPending(this.threadId, "stopped");
+    await this.q.interrupt();
+    return true;
   }
 
   /** Shut the child down. The Claude session id survives in the DB for resume. */
@@ -123,6 +139,7 @@ export class TopicSession {
     this.turnActive = true;
     this.usage = zeroUsage();
     this.failure = null;
+    this.stopped = false;
     this.stderr = "";
     this.channel.resetSent();
     this.out.clear();
@@ -134,9 +151,11 @@ export class TopicSession {
     const status = this.status;
     const failure = this.failure;
     const usage = this.usage;
+    const stopped = this.stopped;
     this.status = null;
     this.turnActive = false;
     this.failure = null;
+    this.stopped = false;
 
     // The agent stayed silent — fall back to whatever text the turn produced,
     // rather than leaving the topic with nothing but a summary.
@@ -146,7 +165,7 @@ export class TopicSession {
 
     addUsage(this.threadId, usage);
     if (this.sessionId) setSession(this.threadId, this.sessionId);
-    await status?.finish(summarize(ok && !failure, status, usage));
+    await status?.finish(summarize(ok && !failure, status, usage, stopped));
     await this.retitle();
     this.armIdleTimer();
   }
@@ -221,7 +240,9 @@ export class TopicSession {
               const text = (msg as any).result;
               if (typeof text === "string") this.out.push(text);
             }
-            if (!ok) this.failure = `⚠️ ${msg.subtype}: ${(msg as any).error ?? ""}`;
+            if (!ok && !this.stopped) {
+              this.failure = `⚠️ ${msg.subtype}: ${(msg as any).error ?? ""}`;
+            }
             await this.endTurn(ok);
             break;
           }
@@ -252,8 +273,13 @@ export class TopicSession {
 }
 
 /** The one line that replaces the live status when a turn ends. */
-function summarize(ok: boolean, status: TurnStatus | null, usage: Usage): string {
-  const parts = [ok ? "✅" : "⚠️", humanMs(status?.elapsedMs ?? 0)];
+function summarize(
+  ok: boolean,
+  status: TurnStatus | null,
+  usage: Usage,
+  stopped = false,
+): string {
+  const parts = [stopped ? "⏹" : ok ? "✅" : "⚠️", humanMs(status?.elapsedMs ?? 0)];
   if (status && status.toolCalls > 0) parts.push(`🔧 ${status.toolCalls}`);
   if (usage.inTokens || usage.outTokens) {
     parts.push(`${fmtTokens(usage.inTokens)}↑ ${fmtTokens(usage.outTokens)}↓`);
@@ -276,6 +302,11 @@ export function sessionFor(
   const s = new TopicSession(bot, topic.thread_id, topic.cwd, topic.session_id);
   live.set(topic.thread_id, s);
   return s;
+}
+
+/** A topic's session only if it is already up — never starts one. */
+export function liveSession(threadId: number): TopicSession | undefined {
+  return live.get(threadId);
 }
 
 /**

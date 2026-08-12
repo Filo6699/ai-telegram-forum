@@ -31,8 +31,16 @@ export function isBlanketAllowed(threadId: number, tool: string): boolean {
 /** Forget a topic's granted permissions — called when its session ends. */
 export function clearPermissions(threadId: number): void {
   blanket.delete(threadId);
+  denyPending(threadId, "session ended");
+}
+
+/**
+ * Settle a topic's open prompts as denials. An interrupt aborts the turn, but a
+ * tool call parked on a button would otherwise wait for its timeout.
+ */
+export function denyPending(threadId: number, note: string): void {
   for (const [id, p] of pending) {
-    if (p.threadId === threadId) settle(id, "deny", "session ended");
+    if (p.threadId === threadId) settle(id, "deny", note);
   }
 }
 
