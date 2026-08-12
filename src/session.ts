@@ -59,7 +59,7 @@ export class TopicSession {
     private sessionId: string | null,
   ) {
     this.out = new TopicRenderer(bot, cfg.chatId, threadId);
-    this.channel = createTgChannel(this.out);
+    this.channel = createTgChannel(this.out, cwd);
   }
 
   /** The running SDK query, if the child is up — for control-channel questions. */

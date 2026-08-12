@@ -1,10 +1,13 @@
-import type { Bot } from "grammy";
+import { type Bot, InputFile } from "grammy";
 import telegramify from "telegramify-markdown";
 import { toTelegramHtml } from "./html.js";
+import type { MediaKind, OutgoingFile } from "./media.js";
 import { flattenTables } from "./tables.js";
 
 const TG_LIMIT = 4096;
 const RAW_CHUNK = 2800; // raw markdown per message; formatted stays under TG_LIMIT
+const CAPTION_LIMIT = 1024; // Telegram's cap on a caption, formatting included
+const ALBUM_MAX = 10; // media per sendMediaGroup call
 
 /** Run a renderer, returning null if it throws or produces nothing. */
 function safeRender(fn: (s: string) => string, raw: string): string | null {
@@ -33,6 +36,29 @@ function tiers(raw: string): Array<{ text: string | null; mode: Mode }> {
     { text: safeRender(toTelegramHtml, raw), mode: "HTML" },
     { text: raw.slice(0, TG_LIMIT), mode: undefined },
   ];
+}
+
+/**
+ * Telegram only groups like with like: photos and videos share an album,
+ * documents and audio each need their own, and an animation can't be grouped at
+ * all — it travels as a document once it has company.
+ */
+const albumClass = (kind: MediaKind): string =>
+  kind === "photo" || kind === "video" ? "visual" : kind === "audio" ? "audio" : "document";
+
+/** Split files into runs Telegram will accept as one album each. */
+function albums(files: OutgoingFile[]): OutgoingFile[][] {
+  const out: OutgoingFile[][] = [];
+  for (const file of files) {
+    const cur = out.at(-1);
+    const fits =
+      cur &&
+      cur.length < ALBUM_MAX &&
+      albumClass(cur[0]!.kind) === albumClass(file.kind);
+    if (fits) cur.push(file);
+    else out.push([file]);
+  }
+  return out;
 }
 
 /**
@@ -128,6 +154,93 @@ export class TopicRenderer {
       if (id !== null) last = id;
     }
     return last;
+  }
+
+  /** One upload attempt: a single file, or an album of them. Throws on refusal. */
+  private async postAlbum(
+    group: OutgoingFile[],
+    cap: { text: string; mode: Mode } | null,
+  ): Promise<number[]> {
+    // InputFile is built fresh per attempt — a retry must not reuse a stream
+    // the failed send already read.
+    const capOpts = cap
+      ? { caption: cap.text, ...(cap.mode ? { parse_mode: cap.mode } : {}) }
+      : {};
+
+    if (group.length === 1) {
+      const { path, kind } = group[0]!;
+      const file = new InputFile(path);
+      const opts = { message_thread_id: this.threadId, ...capOpts };
+      const api = this.bot.api;
+      const sent =
+        kind === "photo"
+          ? await api.sendPhoto(this.chatId, file, opts)
+          : kind === "video"
+            ? await api.sendVideo(this.chatId, file, opts)
+            : kind === "audio"
+              ? await api.sendAudio(this.chatId, file, opts)
+              : kind === "animation"
+                ? await api.sendAnimation(this.chatId, file, opts)
+                : await api.sendDocument(this.chatId, file, opts);
+      return [sent.message_id];
+    }
+
+    const media = group.map((f, i) => ({
+      // An animation only reaches an album as a document.
+      type: f.kind === "animation" ? "document" : f.kind,
+      media: new InputFile(f.path),
+      ...(i === 0 ? capOpts : {}),
+    }));
+    const sent = await this.bot.api.sendMediaGroup(this.chatId, media as never, {
+      message_thread_id: this.threadId,
+    });
+    return sent.map((m) => m.message_id);
+  }
+
+  /**
+   * Post files, using `raw` as the caption on the first one when it fits.
+   * Returns whether the caption made it — if not, the caller still owes the
+   * user that text as its own message.
+   */
+  async sendMedia(
+    files: OutgoingFile[],
+    raw: string,
+  ): Promise<{ ids: number[]; captioned: boolean; failed: OutgoingFile[] }> {
+    const ids: number[] = [];
+    const failed: OutgoingFile[] = [];
+    let captioned = false;
+
+    for (const group of albums(files)) {
+      // Caption tiers, best first, then a last resort with no caption at all:
+      // a rejected caption must not cost the user the file.
+      const wantCaption = !captioned && raw.trim().length > 0;
+      const caps: Array<{ text: string; mode: Mode } | null> = wantCaption
+        ? tiers(flattenTables(raw))
+            .filter((t): t is { text: string; mode: Mode } =>
+              Boolean(t.text && t.text.length <= CAPTION_LIMIT),
+            )
+            .map((t) => ({ text: t.text, mode: t.mode }))
+        : [];
+      caps.push(null);
+
+      let posted = false;
+      for (const cap of caps) {
+        try {
+          ids.push(...(await this.postAlbum(group, cap)));
+          if (cap) captioned = true;
+          posted = true;
+          break;
+        } catch (err) {
+          console.warn(
+            `[render] upload rejected (${group.length} file(s), caption: ${cap?.mode ?? "none"}):`,
+            String(err),
+          );
+        }
+      }
+      if (!posted) failed.push(...group);
+    }
+
+    return { ids, captioned, failed };
   }
 
   /**

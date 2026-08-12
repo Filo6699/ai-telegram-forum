@@ -83,6 +83,12 @@ GIF, WebP) with an optional caption, in the launcher or inside a topic, and the
 agent sees the image itself alongside the caption. An album arrives as several
 messages; the agent gets them together at its next step.
 
+**And it sends them back.** The agent can attach local files to anything it
+says — a screenshot it just took, a chart, a log, a PDF. Images and video show
+up inline, everything else arrives as a file, and its text rides along as the
+caption. Files over Telegram's 50 MB upload limit are refused, and the agent is
+told so rather than left thinking it delivered them.
+
 `/usage` reports the tokens and cost spent in that topic (in the launcher: the
 totals across every topic), followed by your Claude plan's own rate-limit
 windows — the 5-hour and weekly meters the CLI's `/usage` shows, drawn as bars
@@ -192,12 +198,12 @@ finish.
 | `src/install-command.ts` | install the `/telegramify` slash command |
 | `src/permission.ts` | tool approval prompts (inline buttons) |
 | `src/claude.ts` | SDK options: model, permissions, usage accounting |
-| `src/tg-tools.ts` | in-process MCP server: the agent's own `send` tool |
+| `src/tg-tools.ts` | in-process MCP server: the agent's own `send` tool (text + files) |
 | `src/status.ts` | live status line, then the turn summary |
 | `src/limits.ts` | plan rate limits (5-hour / weekly) behind `/usage` |
 | `src/render.ts` | markdown → Telegram messages, with format fallback |
 | `src/fmt.ts`    | duration & token formatting |
-| `src/media.ts`  | download an inbound photo for the agent's message |
+| `src/media.ts`  | inbound photos in, outbound attachments out |
 | `src/cwd.ts`    | parse `@alias` / `/path` prefix, make titles |
 | `src/db.ts`     | SQLite state (`node:sqlite`) |
 | `src/sweep.ts`  | close/delete idle topics, prune transcripts |

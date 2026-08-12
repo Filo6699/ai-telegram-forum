@@ -1,5 +1,6 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { resolveOutgoing } from "./media.ts";
 import type { TopicRenderer } from "./render.ts";
 
 const SERVER_NAME = "tg";
@@ -26,7 +27,12 @@ way to say anything — if you never call it, they see nothing.
 - Telegram has NO tables. Never send one: use a short list, \`Label: value\`
   lines, or a fenced code block if the columns really matter.
 - One call = one message = one notification on their phone. Batch related
-  thoughts into a single call instead of firing several in a row.`;
+  thoughts into a single call instead of firing several in a row.
+- You can attach local files with the \`files\` argument — screenshots, images,
+  logs, PDFs, an artifact you just produced. Paths are relative to your working
+  directory. Images arrive as pictures, everything else as a file; your text
+  rides along as the caption. Attach the thing itself rather than describing it,
+  but don't attach source files they can already read.`;
 
 export interface TgChannel {
   server: ReturnType<typeof createSdkMcpServer>;
@@ -36,8 +42,15 @@ export interface TgChannel {
   resetSent(): void;
 }
 
-/** An in-process MCP server that lets the agent post into one specific topic. */
-export function createTgChannel(out: TopicRenderer): TgChannel {
+const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
+const failure = (s: string) => ({ ...text(s), isError: true as const });
+
+/**
+ * An in-process MCP server that lets the agent post into one specific topic.
+ * `cwd` is the session's working directory — what a relative attachment path
+ * is relative to.
+ */
+export function createTgChannel(out: TopicRenderer, cwd: string): TgChannel {
   let sent = 0;
 
   const server = createSdkMcpServer({
@@ -48,30 +61,59 @@ export function createTgChannel(out: TopicRenderer): TgChannel {
     tools: [
       tool(
         "send",
-        "Send a message to the person you are talking to on Telegram. This is the only way to reach them — your turn text is not delivered. Markdown is supported, except tables — Telegram cannot render them.",
+        "Send a message to the person you are talking to on Telegram, optionally with files attached. This is the only way to reach them — your turn text is not delivered. Markdown is supported, except tables — Telegram cannot render them.",
         {
           text: z
             .string()
+            .default("")
             .describe("Message body. Markdown, no tables; keep it short."),
+          files: z
+            .array(z.string())
+            .optional()
+            .describe(
+              "Local paths to attach, relative to your working directory or absolute. Images and video are shown inline, anything else is sent as a file. Max 50 MB each.",
+            ),
         },
-        async ({ text }) => {
-          if (!text.trim()) {
-            return {
-              content: [{ type: "text" as const, text: "refused: empty message" }],
-              isError: true,
-            };
+        async (args) => {
+          const body = args.text ?? "";
+          const paths = args.files ?? [];
+          if (!body.trim() && !paths.length) return failure("refused: empty message");
+
+          if (!paths.length) {
+            const id = await out.sendText(body);
+            if (id === null) {
+              return failure("delivery failed — Telegram rejected every rendering");
+            }
+            sent++;
+            return text(`sent (id: ${id})`);
           }
-          const id = await out.sendText(text);
-          if (id === null) {
-            return {
-              content: [
-                { type: "text" as const, text: "delivery failed — Telegram rejected every rendering" },
-              ],
-              isError: true,
-            };
+
+          const { files, errors } = resolveOutgoing(cwd, paths);
+          if (!files.length) {
+            // Nothing to attach: the words still matter more than the files.
+            const id = body.trim() ? await out.sendText(body) : null;
+            if (id !== null) sent++;
+            return failure(
+              `no file could be attached:\n${errors.join("\n")}` +
+                (id !== null ? "\n(the text was sent on its own)" : ""),
+            );
           }
+
+          const { ids, captioned, failed } = await out.sendMedia(files, body);
+          // A caption that didn't fit, or files that never went out, still owe
+          // the user the text — a send is not allowed to swallow it.
+          if (body.trim() && !captioned) {
+            const id = await out.sendText(body);
+            if (id !== null) ids.push(id);
+          }
+          if (!ids.length) return failure("delivery failed — Telegram rejected the upload");
           sent++;
-          return { content: [{ type: "text" as const, text: `sent (id: ${id})` }] };
+
+          const notes = [...errors, ...failed.map((f) => `${f.path}: upload rejected`)];
+          return text(
+            `sent (${files.length - failed.length} file(s), id: ${ids.at(-1)})` +
+              (notes.length ? `\nnot attached:\n${notes.join("\n")}` : ""),
+          );
         },
         { alwaysLoad: true },
       ),
