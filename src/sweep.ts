@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { GrammyError, HttpError, type Bot } from "grammy";
 import { cfg } from "./config.ts";
-import { deleteTopic, listStale, setStatus, type Topic } from "./db.ts";
+import { deleteTopic, listStale, type Topic } from "./db.ts";
 import { endSession } from "./session.ts";
 
 const SWEEP_INTERVAL_MS = 5 * 60_000;
@@ -49,29 +49,9 @@ async function forget(t: Topic, reason: string): Promise<void> {
 }
 
 async function sweepOnce(bot: Bot): Promise<void> {
-  const { toClose, toDelete } = listStale(cfg.closeAfterMs, cfg.deleteAfterMs);
-
-  for (const t of toClose) {
-    try {
-      await bot.api.closeForumTopic(cfg.chatId, t.thread_id);
-      endSession(t.thread_id);
-      setStatus(t.thread_id, "closed");
-      console.log(`[sweep] closed idle topic ${t.thread_id} (${t.title})`);
-    } catch (err) {
-      if (isTopicGone(err)) {
-        await forget(t, "gone from Telegram");
-      } else if (isNetworkDown(err)) {
-        console.warn("[sweep] Telegram unreachable, retrying next sweep");
-        return;
-      } else if (err instanceof GrammyError && err.description.includes("TOPIC_NOT_MODIFIED")) {
-        setStatus(t.thread_id, "closed"); // already closed by hand
-      } else {
-        console.warn(`[sweep] close failed for ${t.thread_id}:`, String(err));
-      }
-    }
-  }
-
-  for (const t of toDelete) {
+  // Only deletion: closing a topic pushes a notification to the user, which is
+  // pure noise for a topic they've already stopped using.
+  for (const t of listStale(cfg.deleteAfterMs)) {
     try {
       await bot.api.deleteForumTopic(cfg.chatId, t.thread_id);
       endSession(t.thread_id);

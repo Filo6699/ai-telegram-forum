@@ -74,12 +74,7 @@ const stmts = {
   setStatus: db.prepare("UPDATE topics SET status = ? WHERE thread_id = ?"),
   setTitle: db.prepare("UPDATE topics SET title = ? WHERE thread_id = ?"),
   del: db.prepare("DELETE FROM topics WHERE thread_id = ?"),
-  staleActive: db.prepare(
-    "SELECT * FROM topics WHERE status = 'active' AND last_activity < ?",
-  ),
-  staleClosed: db.prepare(
-    "SELECT * FROM topics WHERE status = 'closed' AND last_activity < ?",
-  ),
+  stale: db.prepare("SELECT * FROM topics WHERE last_activity < ?"),
   addUsage: db.prepare(
     `UPDATE topics
        SET turns = turns + 1,
@@ -154,14 +149,7 @@ export function totals(): Totals {
   return stmts.totals.get() as unknown as Totals;
 }
 
-/** Active topics idle past `closeAfterMs`, plus closed topics idle past `deleteAfterMs`. */
-export function listStale(closeAfterMs: number, deleteAfterMs: number): {
-  toClose: Topic[];
-  toDelete: Topic[];
-} {
-  const now = Date.now();
-  return {
-    toClose: stmts.staleActive.all(now - closeAfterMs) as unknown as Topic[],
-    toDelete: stmts.staleClosed.all(now - deleteAfterMs) as unknown as Topic[],
-  };
+/** Topics idle past `deleteAfterMs`, whatever their status. */
+export function listStale(deleteAfterMs: number): Topic[] {
+  return stmts.stale.all(Date.now() - deleteAfterMs) as unknown as Topic[];
 }

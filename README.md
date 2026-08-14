@@ -9,8 +9,8 @@ via the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk).
 
 **One topic = one Claude session.** A dedicated *"New session"* topic acts as a
 launcher: send it a message and the bot spins up a fresh topic + session and
-continues the conversation there. Idle topics are auto-closed and eventually
-deleted, so the forum stays tidy.
+continues the conversation there. Long-idle topics are deleted, so the forum
+stays tidy.
 
 ```
         Telegram forum (supergroup, Topics ON)
@@ -173,13 +173,13 @@ Two modes:
 ## Cleanup lifecycle
 
 ```
-active ──idle CLOSE_AFTER_HOURS──▶ closed ──idle DELETE_AFTER_HOURS──▶ deleted
-  ▲                                   │
-  └──────── you message it ───────────┘ (reopen)
+active ──idle DELETE_AFTER_HOURS──▶ deleted
 ```
 
-A sweep runs every 5 min. `deleted` also removes the on-disk Claude transcripts
-for that cwd. Defaults: close after 36h, delete 7 days after closing.
+A sweep runs every 5 min and only ever deletes — topics are never auto-closed,
+since closing one pushes a Telegram notification for a topic you've already
+stopped using. Deleting also removes the on-disk Claude transcripts for that
+cwd. Default: delete after 7 days idle.
 
 Separately, a topic's Claude process is shut down after `SESSION_IDLE_MINUTES`
 (default 20) of silence. That's invisible from Telegram — the next message

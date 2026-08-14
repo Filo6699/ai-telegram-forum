@@ -56,7 +56,6 @@ export const cfg = {
     .map((t) => t.trim())
     .filter(Boolean),
 
-  closeAfterMs: hours("CLOSE_AFTER_HOURS", 36),
   deleteAfterMs: hours("DELETE_AFTER_HOURS", 168),
 
   // How long a topic's Claude process is kept alive after its last message.
