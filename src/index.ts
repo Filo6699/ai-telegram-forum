@@ -173,7 +173,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
       initial: inLauncher ? (nextEffort ?? null) : (topic?.effort ?? null),
       cwd: topic?.cwd ?? cfg.defaultCwd,
     })
-      .then((level) => applyEffort(ctx, thread, level, false))
+      .then(({ level }) => applyEffort(ctx, thread, level, false))
       .catch((err) => console.warn("[effort] applying the picked level failed:", String(err)));
     return true;
   }
@@ -257,21 +257,29 @@ async function launch(ctx: any, text: string, images: ImagePart[]): Promise<void
   // created. An untouched picker falls through in seconds, so a launch nobody
   // answers still starts — but once the user reaches for a button, the launch
   // waits for them to finish.
-  const effort = await askEffort(bot, {
+  const { level: effort, messageId } = await askEffort(bot, {
     threadId: cfg.launcherThreadId,
     title: `effort for «${title}»`,
     initial: takeNextEffort(),
     cwd,
     firstWaitMs: LAUNCH_WAIT_MS,
+    rewritten: true,
   });
 
   const topic = await ctx.api.createForumTopic(cfg.chatId, title);
   const tid = topic.message_thread_id;
   createTopic({ threadId: tid, cwd, title, effort });
 
-  await ctx.reply(`→ «${title}»  (cwd: ${cwd})`, {
-    message_thread_id: cfg.launcherThreadId,
-  });
+  // The picker becomes the launch line: one message for one launch, rather than
+  // the settled picker and a "→ …" note sitting one above the other.
+  const line = `→ «${title}»  (cwd: ${cwd})  ⚙️ ${effortLabel(effort, defaultEffort(cwd))}`;
+  const posted =
+    messageId !== null &&
+    (await ctx.api
+      .editMessageText(cfg.chatId, messageId, line)
+      .then(() => true)
+      .catch(() => false));
+  if (!posted) await ctx.reply(line, { message_thread_id: cfg.launcherThreadId });
 
   // The launcher message lives in another topic — repeat it here so the
   // thread reads as a whole conversation. A photo is copied verbatim;

@@ -93,6 +93,13 @@ function keyboard(id: string, selection: Effort, fallback: EffortLevel): InlineK
     .text("✅ Confirm", `e:${id}:ok`);
 }
 
+export interface EffortChoice {
+  level: Effort;
+  /** The picker's own message, for a caller that would rather rewrite it than
+   * post a second one. `null` when the picker never made it onto the screen. */
+  messageId: number | null;
+}
+
 /**
  * Put the effort buttons on screen and resolve with what the user settled on.
  *
@@ -114,9 +121,15 @@ export function askEffort(
     cwd: string;
     /** Wait before the first press. Defaults to the full pick window. */
     firstWaitMs?: number;
+    /**
+     * The caller will rewrite the picker's message itself, so settling only
+     * takes the buttons off. Without this the two edits would race, and the
+     * loser's text is what stays on screen.
+     */
+    rewritten?: boolean;
   },
-): Promise<Effort> {
-  return new Promise<Effort>((resolve) => {
+): Promise<EffortChoice> {
+  return new Promise<EffortChoice>((resolve) => {
     const id = randomBytes(4).toString("hex");
     const fallback = defaultEffort(opts.cwd);
     const title = opts.title
@@ -137,7 +150,11 @@ export function askEffort(
             const p = pickers.get(id);
             pickers.delete(id);
             if (p) clearTimeout(p.timer);
-            resolve(choice);
+            resolve({ level: choice, messageId: sent.message_id });
+            if (opts.rewritten) {
+              void bot.api.editMessageReplyMarkup(cfg.chatId, sent.message_id).catch(() => {});
+              return;
+            }
             const label = effortLabel(choice, fallback);
             void bot.api
               .editMessageText(cfg.chatId, sent.message_id, `⚙️ effort: <b>${label}</b>`, {
@@ -159,7 +176,7 @@ export function askEffort(
         },
         (err) => {
           console.warn("[effort] could not show the picker:", String(err));
-          resolve(opts.initial);
+          resolve({ level: opts.initial, messageId: null });
         },
       );
   });

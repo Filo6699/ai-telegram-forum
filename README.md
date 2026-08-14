@@ -105,7 +105,9 @@ tick is read from the same settings files the CLI reads (`effortLevel` in the
 managed, project and user `settings.json`), which is why a level you set in a
 terminal shows up here. Touch a button and the launch waits for you: press
 levels until you're happy, then **Confirm**, or just stop pressing and it goes
-with your last pick a minute later.
+with your last pick a minute later. Once it's settled that same message turns
+into the launch line — `→ «title» (cwd: …) ⚙️ high` — so a launch is one message
+in the launcher, not a picker plus a note.
 
 `/effort high` sets it without the buttons; `/effort` alone brings them up.
 `/effort default` hands the choice back to your settings.
