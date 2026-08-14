@@ -9,7 +9,7 @@ import { queryOptions, readUsage, type Usage } from "./claude.ts";
 import { cfg } from "./config.ts";
 import { isPendingTitle } from "./cwd.ts";
 import { addUsage, getTopic, setEffort, setSession, setTitle, touch } from "./db.ts";
-import { effortLabel, type Effort } from "./effort.ts";
+import { defaultEffort, effortLabel, type Effort } from "./effort.ts";
 import { fmtTokens, humanMs } from "./fmt.ts";
 import { clearPermissions, denyPending } from "./permission.ts";
 import { TopicRenderer } from "./render.ts";
@@ -194,7 +194,9 @@ export class TopicSession {
     const failure = this.failure;
     const usage = this.usage;
     const stopped = this.stopped;
-    const effort = this.turnEffort;
+    // Nothing picked means the turn ran on the level Claude resolves for this
+    // cwd — a real level, so it goes in the summary like any other.
+    const effort = this.turnEffort ?? defaultEffort(this.cwd);
     this.status = null;
     this.turnActive = false;
     this.failure = null;
@@ -323,13 +325,10 @@ function summarize(
   ok: boolean,
   status: TurnStatus | null,
   usage: Usage,
-  effort: Effort,
+  effort: string,
   stopped = false,
 ): string {
-  const parts = [stopped ? "⏹" : ok ? "✅" : "⚠️", humanMs(status?.elapsedMs ?? 0)];
-  // Only a level we picked is worth showing: on default the CLI decides, and it
-  // never tells us which level that was.
-  if (effort) parts.push(`⚙️ ${effort}`);
+  const parts = [stopped ? "⏹" : ok ? "✅" : "⚠️", humanMs(status?.elapsedMs ?? 0), `⚙️ ${effort}`];
   if (status && status.toolCalls > 0) parts.push(`🔧 ${status.toolCalls}`);
   if (usage.inTokens || usage.outTokens) {
     parts.push(`${fmtTokens(usage.inTokens)}↑ ${fmtTokens(usage.outTokens)}↓`);

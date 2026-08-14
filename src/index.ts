@@ -5,6 +5,7 @@ import { fetchImage, isSupportedImage, type ImagePart } from "./media.ts";
 import { placeholderTitle, resolveCwd } from "./cwd.ts";
 import {
   askEffort,
+  defaultEffort,
   effortLabel,
   effortUsage,
   LAUNCH_WAIT_MS,
@@ -31,7 +32,7 @@ function topicUsageText(t: Topic): string {
   return (
     `📊 *${t.title}*\n` +
     `turns: ${t.turns}\n` +
-    `effort: ${effortLabel(t.effort)}\n` +
+    `effort: ${effortLabel(t.effort, defaultEffort(t.cwd))}\n` +
     `tokens: ${fmt(t.in_tokens)} in / ${fmt(t.out_tokens)} out\n` +
     `cost: $${t.cost_usd.toFixed(4)}`
   );
@@ -42,7 +43,7 @@ function totalsText(): string {
   return (
     `📊 *All topics*\n` +
     `topics: ${s.topics} · turns: ${s.turns}\n` +
-    `next session effort: ${effortLabel(nextEffort ?? null)}\n` +
+    `next session effort: ${effortLabel(nextEffort ?? null, defaultEffort(cfg.defaultCwd))}\n` +
     `tokens: ${fmt(s.in_tokens)} in / ${fmt(s.out_tokens)} out\n` +
     `cost: $${s.cost_usd.toFixed(4)}`
   );
@@ -75,11 +76,13 @@ async function applyEffort(
   if (isLauncher(thread)) {
     nextEffort = level;
     if (announce) {
-      await ctx.reply(`⚙️ next session: ${effortLabel(level)}`, { message_thread_id: thread });
+      const label = effortLabel(level, defaultEffort(cfg.defaultCwd));
+      await ctx.reply(`⚙️ next session: ${label}`, { message_thread_id: thread });
     }
     return;
   }
-  if (!getTopic(thread!)) {
+  const t = getTopic(thread!);
+  if (!t) {
     await ctx.reply("⚠️ run this inside a session topic, not here.", {
       message_thread_id: thread,
     });
@@ -89,7 +92,9 @@ async function applyEffort(
   if (s) s.setEffort(level);
   else setEffort(thread!, level);
   if (announce) {
-    await ctx.reply(`⚙️ effort: ${effortLabel(level)}`, { message_thread_id: thread });
+    await ctx.reply(`⚙️ effort: ${effortLabel(level, defaultEffort(t.cwd))}`, {
+      message_thread_id: thread,
+    });
   }
 }
 
@@ -161,11 +166,12 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
     }
     // No level given — same effect, chosen with the buttons instead.
     const inLauncher = isLauncher(thread);
-    const current = inLauncher ? (nextEffort ?? null) : (getTopic(thread!)?.effort ?? null);
+    const topic = inLauncher ? undefined : getTopic(thread!);
     void askEffort(bot, {
       threadId: thread,
       title: inLauncher ? "effort for the next session" : "effort for this topic",
-      initial: current,
+      initial: inLauncher ? (nextEffort ?? null) : (topic?.effort ?? null),
+      cwd: topic?.cwd ?? cfg.defaultCwd,
     })
       .then((level) => applyEffort(ctx, thread, level, false))
       .catch((err) => console.warn("[effort] applying the picked level failed:", String(err)));
@@ -255,6 +261,7 @@ async function launch(ctx: any, text: string, images: ImagePart[]): Promise<void
     threadId: cfg.launcherThreadId,
     title: `effort for «${title}»`,
     initial: takeNextEffort(),
+    cwd,
     firstWaitMs: LAUNCH_WAIT_MS,
   });
 

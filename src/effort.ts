@@ -1,4 +1,7 @@
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { InlineKeyboard, type Bot } from "grammy";
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import { cfg } from "./config.ts";
@@ -8,13 +11,47 @@ export type Effort = EffortLevel | null;
 
 const LEVELS: EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
 
+/** What the SDK documents as the effort a model runs on when nothing sets one. */
+const BUILT_IN_DEFAULT: EffortLevel = "high";
+
 /** How long an untouched launch picker waits before the new session just starts. */
 export const LAUNCH_WAIT_MS = 5_000;
 
 /** How long a picker waits for the next press once the user has started choosing. */
 export const PICK_WAIT_MS = 60_000;
 
-export const effortLabel = (e: Effort): string => e ?? "default";
+/**
+ * The level Claude itself would run on in `cwd` — the one shown pre-selected,
+ * since "default" is a level like any other, not a menu entry of its own.
+ * Read from the settings files the CLI reads, in its precedence order, so it
+ * follows a `/effort` the user set in a terminal instead of us keeping a copy.
+ */
+export function defaultEffort(cwd: string): EffortLevel {
+  const files = [
+    "/etc/claude-code/managed-settings.json",
+    join(cwd, ".claude", "settings.local.json"),
+    join(cwd, ".claude", "settings.json"),
+    join(homedir(), ".claude", "settings.json"),
+  ];
+  for (const file of files) {
+    const level = readEffortLevel(file);
+    if (level) return level;
+  }
+  return BUILT_IN_DEFAULT;
+}
+
+function readEffortLevel(file: string): EffortLevel | null {
+  try {
+    const raw = JSON.parse(readFileSync(file, "utf8")) as { effortLevel?: string };
+    return (raw.effortLevel ? parseEffort(raw.effortLevel) : null) ?? null;
+  } catch {
+    return null; // missing, unreadable or not JSON — the next source answers
+  }
+}
+
+/** `fallback` names the level an unset effort resolves to, when we know it. */
+export const effortLabel = (e: Effort, fallback?: EffortLevel): string =>
+  e ?? (fallback ? `${fallback} (default)` : "default");
 
 /** Parse a `/effort <level>` argument. `undefined` = not a level we know. */
 export function parseEffort(raw: string): Effort | undefined {
@@ -30,22 +67,28 @@ interface Picker {
   messageId: number;
   threadId: number | undefined;
   selection: Effort;
+  fallback: EffortLevel;
   timer: ReturnType<typeof setTimeout>;
   settle: (choice: Effort) => void;
 }
 
 const pickers = new Map<string, Picker>();
 
-function keyboard(id: string, selection: Effort): InlineKeyboard {
-  const mark = (e: Effort, text: string) => (e === selection ? `✓ ${text}` : text);
+/**
+ * The five levels, tick on the one in force. Nothing picked yet means the
+ * session runs on `fallback`, so that is what the tick sits on — the default is
+ * a level, not an extra button.
+ */
+function keyboard(id: string, selection: Effort, fallback: EffortLevel): InlineKeyboard {
+  const active = selection ?? fallback;
+  const mark = (e: EffortLevel) => (e === active ? `✓ ${e}` : e);
   return new InlineKeyboard()
-    .text(mark(null, "default"), `e:${id}:default`)
-    .text(mark("low", "low"), `e:${id}:low`)
-    .text(mark("medium", "medium"), `e:${id}:medium`)
+    .text(mark("low"), `e:${id}:low`)
+    .text(mark("medium"), `e:${id}:medium`)
+    .text(mark("high"), `e:${id}:high`)
     .row()
-    .text(mark("high", "high"), `e:${id}:high`)
-    .text(mark("xhigh", "xhigh"), `e:${id}:xhigh`)
-    .text(mark("max", "max"), `e:${id}:max`)
+    .text(mark("xhigh"), `e:${id}:xhigh`)
+    .text(mark("max"), `e:${id}:max`)
     .row()
     .text("✅ Confirm", `e:${id}:ok`);
 }
@@ -67,12 +110,15 @@ export function askEffort(
     threadId: number | undefined;
     title: string;
     initial: Effort;
+    /** Where the session runs — the default level is read from its settings. */
+    cwd: string;
     /** Wait before the first press. Defaults to the full pick window. */
     firstWaitMs?: number;
   },
 ): Promise<Effort> {
   return new Promise<Effort>((resolve) => {
     const id = randomBytes(4).toString("hex");
+    const fallback = defaultEffort(opts.cwd);
     const title = opts.title
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
@@ -83,7 +129,7 @@ export function askEffort(
       .sendMessage(cfg.chatId, text, {
         message_thread_id: opts.threadId,
         parse_mode: "HTML",
-        reply_markup: keyboard(id, opts.initial),
+        reply_markup: keyboard(id, opts.initial, fallback),
       })
       .then(
         (sent) => {
@@ -92,8 +138,9 @@ export function askEffort(
             pickers.delete(id);
             if (p) clearTimeout(p.timer);
             resolve(choice);
+            const label = effortLabel(choice, fallback);
             void bot.api
-              .editMessageText(cfg.chatId, sent.message_id, `⚙️ effort: <b>${effortLabel(choice)}</b>`, {
+              .editMessageText(cfg.chatId, sent.message_id, `⚙️ effort: <b>${label}</b>`, {
                 parse_mode: "HTML",
               })
               .catch(() => {});
@@ -102,6 +149,7 @@ export function askEffort(
             messageId: sent.message_id,
             threadId: opts.threadId,
             selection: opts.initial,
+            fallback,
             timer: setTimeout(
               () => settle(opts.initial),
               opts.firstWaitMs ?? PICK_WAIT_MS,
@@ -141,11 +189,13 @@ export function registerEffortButtons(bot: Bot): void {
 
     if (value === "ok") {
       p.settle(p.selection);
-      return void ctx.answerCallbackQuery({ text: effortLabel(p.selection) }).catch(() => {});
+      const label = effortLabel(p.selection, p.fallback);
+      return void ctx.answerCallbackQuery({ text: label }).catch(() => {});
     }
 
+    // Only the five levels are on the keyboard — "default" is never a press.
     const choice = parseEffort(value);
-    if (choice === undefined) return void ctx.answerCallbackQuery().catch(() => {});
+    if (!choice) return void ctx.answerCallbackQuery().catch(() => {});
 
     // Every press restarts the clock: once the user is choosing, we wait.
     p.selection = choice;
@@ -153,7 +203,9 @@ export function registerEffortButtons(bot: Bot): void {
     p.timer = setTimeout(() => p.settle(p.selection), PICK_WAIT_MS);
     await ctx.answerCallbackQuery().catch(() => {});
     await ctx.api
-      .editMessageReplyMarkup(cfg.chatId, p.messageId, { reply_markup: keyboard(id, choice) })
+      .editMessageReplyMarkup(cfg.chatId, p.messageId, {
+        reply_markup: keyboard(id, choice, p.fallback),
+      })
       .catch(() => {});
   });
 }

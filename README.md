@@ -97,20 +97,23 @@ Code activity, not just this bot; on an API-key or Bedrock/Vertex setup there
 are no plan limits and that part is left out.
 
 **Reasoning effort.** Every new session opens with a row of buttons in the
-launcher — `default`, `low`, `medium`, `high`, `xhigh`, `max` — and the topic is
-only created once that's settled. Ignore it and the session starts a few seconds
-later on Claude's own default (this bot keeps no default of its own; with no
-level picked, nothing is passed and the CLI resolves it from your settings and
-model). Touch a button and the launch waits for you: press levels until you're
-happy, then **Confirm**, or just stop pressing and it goes with your last pick a
-minute later.
+launcher — `low`, `medium`, `high`, `xhigh`, `max`, ticked on the one already in
+force — and the topic is only created once that's settled. Ignore it and the
+session starts a few seconds later on exactly that level: the bot keeps no
+default of its own, so nothing is passed and the CLI resolves it as usual. The
+tick is read from the same settings files the CLI reads (`effortLevel` in the
+managed, project and user `settings.json`), which is why a level you set in a
+terminal shows up here. Touch a button and the launch waits for you: press
+levels until you're happy, then **Confirm**, or just stop pressing and it goes
+with your last pick a minute later.
 
 `/effort high` sets it without the buttons; `/effort` alone brings them up.
+`/effort default` hands the choice back to your settings.
 Inside a topic it applies to that topic from its next turn on — a turn already
 running finishes on the level it started with — and it's remembered, so the
 session comes back on it after an idle shutdown. In the launcher it applies to
 the *next* session only, once, and shows up pre-selected in that launch's
-picker. `/effort default` gives the choice back to Claude. The level a turn ran
+picker. The level a turn ran
 on appears in its summary line and in `/usage`.
 
 `/stop`, inside a topic, interrupts the turn running there — the running tool is
