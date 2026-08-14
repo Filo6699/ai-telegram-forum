@@ -8,7 +8,8 @@ import type { Bot } from "grammy";
 import { queryOptions, readUsage, type Usage } from "./claude.ts";
 import { cfg } from "./config.ts";
 import { isPendingTitle } from "./cwd.ts";
-import { addUsage, getTopic, setSession, setTitle, touch } from "./db.ts";
+import { addUsage, getTopic, setEffort, setSession, setTitle, touch } from "./db.ts";
+import { effortLabel, type Effort } from "./effort.ts";
 import { fmtTokens, humanMs } from "./fmt.ts";
 import { clearPermissions, denyPending } from "./permission.ts";
 import { TopicRenderer } from "./render.ts";
@@ -42,9 +43,14 @@ export class TopicSession {
   private q: Query | null = null;
   private running = false;
 
+  // An effort change asked for mid-turn: applied once the turn is over, so a
+  // running turn keeps the level it started on.
+  private effortDirty = false;
+
   // Per-turn state.
   private status: TurnStatus | null = null;
   private turnActive = false;
+  private turnEffort: Effort = null;
   private usage = zeroUsage();
   private failure: string | null = null;
   private stopped = false;
@@ -57,6 +63,7 @@ export class TopicSession {
     readonly threadId: number,
     private cwd: string,
     private sessionId: string | null,
+    private effortLevel: Effort = null,
   ) {
     this.out = new TopicRenderer(bot, cfg.chatId, threadId);
     this.channel = createTgChannel(this.out, cwd);
@@ -65,6 +72,40 @@ export class TopicSession {
   /** The running SDK query, if the child is up — for control-channel questions. */
   get live(): Query | null {
     return this.q;
+  }
+
+  get effort(): Effort {
+    return this.effortLevel;
+  }
+
+  /**
+   * Change the reasoning effort for this topic. It is recorded against the
+   * topic, so a session that is restarted later comes back on the same level,
+   * and it lands on the agent from the next turn on — a turn already running
+   * finishes on the level it started with.
+   */
+  setEffort(level: Effort): void {
+    this.effortLevel = level;
+    setEffort(this.threadId, level);
+    if (!this.q) return; // child is down: `run()` will pass it at startup
+    if (this.turnActive) {
+      this.effortDirty = true;
+      return;
+    }
+    void this.pushEffort();
+  }
+
+  private async pushEffort(): Promise<void> {
+    this.effortDirty = false;
+    // null clears our layer, dropping back to whatever Claude defaults to.
+    try {
+      await this.q?.applyFlagSettings({ effortLevel: this.effortLevel });
+    } catch (err) {
+      console.warn(
+        `[effort] applying ${effortLabel(this.effortLevel)} to topic ${this.threadId} failed:`,
+        String(err),
+      );
+    }
   }
 
   /**
@@ -137,6 +178,7 @@ export class TopicSession {
   private async beginTurn(): Promise<void> {
     if (this.turnActive) return;
     this.turnActive = true;
+    this.turnEffort = this.effortLevel;
     this.usage = zeroUsage();
     this.failure = null;
     this.stopped = false;
@@ -152,6 +194,7 @@ export class TopicSession {
     const failure = this.failure;
     const usage = this.usage;
     const stopped = this.stopped;
+    const effort = this.turnEffort;
     this.status = null;
     this.turnActive = false;
     this.failure = null;
@@ -165,9 +208,11 @@ export class TopicSession {
 
     addUsage(this.threadId, usage);
     if (this.sessionId) setSession(this.threadId, this.sessionId);
-    await status?.finish(summarize(ok && !failure, status, usage, stopped));
+    await status?.finish(summarize(ok && !failure, status, usage, effort, stopped));
     await this.retitle();
     this.armIdleTimer();
+    // The turn is over — an effort change that arrived while it ran can land now.
+    if (this.effortDirty) await this.pushEffort();
   }
 
   /**
@@ -203,6 +248,7 @@ export class TopicSession {
           threadId: this.threadId,
           cwd: this.cwd,
           resume: this.sessionId,
+          effort: this.effortLevel,
           channel: this.channel,
           onStderr: (data) => {
             this.stderr += data;
@@ -277,9 +323,13 @@ function summarize(
   ok: boolean,
   status: TurnStatus | null,
   usage: Usage,
+  effort: Effort,
   stopped = false,
 ): string {
   const parts = [stopped ? "⏹" : ok ? "✅" : "⚠️", humanMs(status?.elapsedMs ?? 0)];
+  // Only a level we picked is worth showing: on default the CLI decides, and it
+  // never tells us which level that was.
+  if (effort) parts.push(`⚙️ ${effort}`);
   if (status && status.toolCalls > 0) parts.push(`🔧 ${status.toolCalls}`);
   if (usage.inTokens || usage.outTokens) {
     parts.push(`${fmtTokens(usage.inTokens)}↑ ${fmtTokens(usage.outTokens)}↓`);
@@ -295,11 +345,17 @@ const live = new Map<number, TopicSession>();
 /** The live session for a topic, started (or resumed) on demand. */
 export function sessionFor(
   bot: Bot,
-  topic: { thread_id: number; cwd: string; session_id: string | null },
+  topic: { thread_id: number; cwd: string; session_id: string | null; effort?: Effort },
 ): TopicSession {
   const existing = live.get(topic.thread_id);
   if (existing) return existing;
-  const s = new TopicSession(bot, topic.thread_id, topic.cwd, topic.session_id);
+  const s = new TopicSession(
+    bot,
+    topic.thread_id,
+    topic.cwd,
+    topic.session_id,
+    topic.effort ?? null,
+  );
   live.set(topic.thread_id, s);
   return s;
 }

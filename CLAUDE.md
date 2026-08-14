@@ -13,7 +13,8 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 | `src/install-command.ts` | writes the `/telegramify` slash command for Claude Code |
 | `src/heartbeat.ts` | broker liveness file: written by the bot, read by the CLI |
 | `src/permission.ts` | tool approval prompts + their inline buttons |
-| `src/claude.ts` | SDK options: model, permission policy, usage accounting |
+| `src/effort.ts` | reasoning-effort pickers, `/effort`, level parsing |
+| `src/claude.ts` | SDK options: model, effort, permission policy, usage accounting |
 | `src/tg-tools.ts` | in-process MCP server — the agent's own `send` tool |
 | `src/status.ts` | the live status line / turn summary message |
 | `src/limits.ts` | plan rate limits (5-hour / weekly) behind `/usage` |
@@ -57,6 +58,12 @@ npm run telegramify -- --dry-run # adopt the current terminal session into a top
   through the message handler's gate, so every handler must check
   `ALLOWED_USER_ID` itself. A permission prompt must always settle — button,
   timeout, or session end — or the tool call waits forever.
+- **Never await a button from inside a message handler.** grammy's polling runs
+  updates one at a time, so a handler that waits on a callback query blocks the
+  update that would settle it — the launch flow detaches (`void launch(…)`) for
+  exactly that reason. And a `callback_query:data` handler that doesn't own the
+  callback must pass it on with `next()`, or the handler registered after it
+  never sees anything.
 - **Adoption binds, it doesn't copy.** `/telegramify` only writes a topic row
   pointing at a session id that already exists on disk — never replay or import
   a transcript. One session id belongs to at most one topic, or the terminal and

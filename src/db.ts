@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { cfg } from "./config.ts";
+import type { Effort } from "./effort.ts";
 
 export type TopicStatus = "active" | "closed";
 
@@ -10,6 +11,8 @@ export interface Topic {
   session_id: string | null;
   cwd: string;
   title: string;
+  /** null = no choice of ours; the session runs on Claude's own default. */
+  effort: Effort;
   status: TopicStatus;
   last_activity: number;
   created_at: number;
@@ -34,6 +37,7 @@ db.exec(`
     session_id    TEXT,
     cwd           TEXT NOT NULL,
     title         TEXT NOT NULL,
+    effort        TEXT,
     status        TEXT NOT NULL DEFAULT 'active',
     last_activity INTEGER NOT NULL,
     created_at    INTEGER NOT NULL,
@@ -50,6 +54,7 @@ for (const col of [
   "in_tokens INTEGER NOT NULL DEFAULT 0",
   "out_tokens INTEGER NOT NULL DEFAULT 0",
   "cost_usd REAL NOT NULL DEFAULT 0",
+  "effort TEXT",
 ]) {
   try {
     db.exec(`ALTER TABLE topics ADD COLUMN ${col}`);
@@ -62,9 +67,10 @@ const stmts = {
   get: db.prepare("SELECT * FROM topics WHERE thread_id = ?"),
   bySession: db.prepare("SELECT * FROM topics WHERE session_id = ?"),
   insert: db.prepare(
-    `INSERT INTO topics (thread_id, session_id, cwd, title, status, last_activity, created_at)
-     VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+    `INSERT INTO topics (thread_id, session_id, cwd, title, effort, status, last_activity, created_at)
+     VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`,
   ),
+  setEffort: db.prepare("UPDATE topics SET effort = ? WHERE thread_id = ?"),
   setSession: db.prepare(
     "UPDATE topics SET session_id = ?, last_activity = ? WHERE thread_id = ?",
   ),
@@ -106,11 +112,16 @@ export function createTopic(t: {
   threadId: number;
   cwd: string;
   title: string;
+  effort?: Effort;
   /** Set when adopting a session that already exists on disk (`/telegramify`). */
   sessionId?: string | null;
 }): void {
   const now = Date.now();
-  stmts.insert.run(t.threadId, t.sessionId ?? null, t.cwd, t.title, now, now);
+  stmts.insert.run(t.threadId, t.sessionId ?? null, t.cwd, t.title, t.effort ?? null, now, now);
+}
+
+export function setEffort(threadId: number, effort: Effort): void {
+  stmts.setEffort.run(effort, threadId);
 }
 
 export function setSession(threadId: number, sessionId: string): void {
