@@ -12,6 +12,7 @@
  * Claude Code session), and failing that the most recent session in `--cwd`.
  */
 import { getSessionInfo, listSessions, type SDKSessionInfo } from "@anthropic-ai/claude-agent-sdk";
+import { dirname, resolve } from "node:path";
 import { Api } from "grammy";
 import { cfg } from "./config.ts";
 import { isPendingTitle, placeholderTitle } from "./cwd.ts";
@@ -61,6 +62,28 @@ async function resolveSession(args: Args): Promise<SDKSessionInfo> {
   return newest;
 }
 
+/**
+ * The directory a resume will actually find the session from.
+ *
+ * A transcript is filed under the project directory of the cwd the session was
+ * *started* in, and stays there for good. `cd` into a subdirectory during the
+ * session and `$PWD` — what `/telegramify` passes as `--cwd` — names a project
+ * that holds no such session, so every turn in the adopted topic dies on
+ * "No conversation found with session ID". Bind the topic to a directory the
+ * session can be found from instead: the one it was started in, or failing that
+ * the nearest ancestor that resolves.
+ */
+async function resumableCwd(id: string, wanted: string, launched?: string): Promise<string> {
+  const holds = async (dir: string) => Boolean(await getSessionInfo(id, { dir }));
+  if (await holds(wanted)) return wanted;
+  if (launched && launched !== wanted && (await holds(launched))) return launched;
+  for (let dir = wanted; dir !== dirname(dir); ) {
+    dir = dirname(dir);
+    if (await holds(dir)) return dir;
+  }
+  return wanted;
+}
+
 /** Prefer a name the user or Claude chose; fall back to the pending placeholder. */
 function titleFor(info: SDKSessionInfo, override?: string): string {
   if (override) return override.slice(0, 128);
@@ -90,7 +113,11 @@ async function main(): Promise<void> {
   }
 
   const info = await resolveSession(args);
-  const cwd = args.cwd ?? info.cwd ?? process.cwd();
+  const wanted = resolve(args.cwd ?? info.cwd ?? process.cwd());
+  const cwd = await resumableCwd(info.sessionId, wanted, info.cwd && resolve(info.cwd));
+  if (cwd !== wanted) {
+    console.warn(`[telegramify] ${wanted} holds no session ${info.sessionId} — binding to ${cwd}`);
+  }
   const api = new Api(cfg.token);
 
   // Already adopted: hand back the topic that owns it rather than forking the
