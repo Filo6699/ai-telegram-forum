@@ -2,6 +2,7 @@ import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import type { Bot } from "grammy";
 import { cfg } from "./config.ts";
 import type { Effort } from "./effort.ts";
+import type { Model } from "./model.ts";
 import { askPermission, isBlanketAllowed } from "./permission.ts";
 import { TG_SEND_TOOL, TG_SYSTEM_PROMPT, type TgChannel } from "./tg-tools.ts";
 
@@ -71,12 +72,14 @@ export function queryOptions(opts: {
   cwd: string;
   resume: string | null;
   effort: Effort;
+  model: Model;
   channel: TgChannel;
   onStderr: (data: string) => void;
 }): Options {
   return {
     cwd: opts.cwd,
-    model: cfg.model,
+    // Nothing picked for this topic — the configured MODEL is the default.
+    model: opts.model ?? cfg.model,
     // Unset means unset: with no `effort` the CLI resolves its own default from
     // settings and the model, which is the default we advertise.
     ...(opts.effort ? { effort: opts.effort } : {}),

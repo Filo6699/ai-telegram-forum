@@ -8,8 +8,9 @@ import type { Bot } from "grammy";
 import { queryOptions, readUsage, type Usage } from "./claude.ts";
 import { cfg } from "./config.ts";
 import { isPendingTitle } from "./cwd.ts";
-import { addUsage, getTopic, setEffort, setSession, setTitle, touch } from "./db.ts";
+import { addUsage, getTopic, setEffort, setModel, setSession, setTitle, touch } from "./db.ts";
 import { defaultEffort, effortLabel, type Effort } from "./effort.ts";
+import { defaultModel, modelLabel, type Model } from "./model.ts";
 import { fmtTokens, humanMs } from "./fmt.ts";
 import { clearPermissions, denyPending } from "./permission.ts";
 import { TopicRenderer } from "./render.ts";
@@ -43,14 +44,16 @@ export class TopicSession {
   private q: Query | null = null;
   private running = false;
 
-  // An effort change asked for mid-turn: applied once the turn is over, so a
-  // running turn keeps the level it started on.
+  // An effort or model change asked for mid-turn: applied once the turn is
+  // over, so a running turn keeps what it started on.
   private effortDirty = false;
+  private modelDirty = false;
 
   // Per-turn state.
   private status: TurnStatus | null = null;
   private turnActive = false;
   private turnEffort: Effort = null;
+  private turnModel: Model = null;
   private usage = zeroUsage();
   private failure: string | null = null;
   private stopped = false;
@@ -64,6 +67,7 @@ export class TopicSession {
     private cwd: string,
     private sessionId: string | null,
     private effortLevel: Effort = null,
+    private modelId: Model = null,
   ) {
     this.out = new TopicRenderer(bot, cfg.chatId, threadId);
     this.channel = createTgChannel(this.out, cwd);
@@ -76,6 +80,10 @@ export class TopicSession {
 
   get effort(): Effort {
     return this.effortLevel;
+  }
+
+  get model(): Model {
+    return this.modelId;
   }
 
   /**
@@ -103,6 +111,36 @@ export class TopicSession {
     } catch (err) {
       console.warn(
         `[effort] applying ${effortLabel(this.effortLevel)} to topic ${this.threadId} failed:`,
+        String(err),
+      );
+    }
+  }
+
+  /**
+   * Change the model for this topic — the same contract as `setEffort`: it is
+   * recorded against the topic, and a turn already running finishes on the
+   * model it started with.
+   */
+  setModel(model: Model): void {
+    this.modelId = model;
+    setModel(this.threadId, model);
+    if (!this.q) return; // child is down: `run()` will pass it at startup
+    if (this.turnActive) {
+      this.modelDirty = true;
+      return;
+    }
+    void this.pushModel();
+  }
+
+  private async pushModel(): Promise<void> {
+    this.modelDirty = false;
+    // Nothing picked means the configured MODEL, which is what the child was
+    // started on — say so explicitly rather than leaving the last pick in place.
+    try {
+      await this.q?.setModel(this.modelId ?? defaultModel());
+    } catch (err) {
+      console.warn(
+        `[model] applying ${modelLabel(this.modelId)} to topic ${this.threadId} failed:`,
         String(err),
       );
     }
@@ -179,6 +217,7 @@ export class TopicSession {
     if (this.turnActive) return;
     this.turnActive = true;
     this.turnEffort = this.effortLevel;
+    this.turnModel = this.modelId;
     this.usage = zeroUsage();
     this.failure = null;
     this.stopped = false;
@@ -195,8 +234,10 @@ export class TopicSession {
     const usage = this.usage;
     const stopped = this.stopped;
     // Nothing picked means the turn ran on the level Claude resolves for this
-    // cwd — a real level, so it goes in the summary like any other.
+    // cwd — a real level, so it goes in the summary like any other. Same for
+    // the model: unset is the configured MODEL, not an absence.
     const effort = this.turnEffort ?? defaultEffort(this.cwd);
+    const model = modelLabel(this.turnModel ?? defaultModel());
     this.status = null;
     this.turnActive = false;
     this.failure = null;
@@ -210,11 +251,12 @@ export class TopicSession {
 
     addUsage(this.threadId, usage);
     if (this.sessionId) setSession(this.threadId, this.sessionId);
-    await status?.finish(summarize(ok && !failure, status, usage, effort, stopped));
+    await status?.finish(summarize(ok && !failure, status, usage, effort, model, stopped));
     await this.retitle();
     this.armIdleTimer();
-    // The turn is over — an effort change that arrived while it ran can land now.
+    // The turn is over — changes that arrived while it ran can land now.
     if (this.effortDirty) await this.pushEffort();
+    if (this.modelDirty) await this.pushModel();
   }
 
   /**
@@ -251,6 +293,7 @@ export class TopicSession {
           cwd: this.cwd,
           resume: this.sessionId,
           effort: this.effortLevel,
+          model: this.modelId,
           channel: this.channel,
           onStderr: (data) => {
             this.stderr += data;
@@ -326,9 +369,15 @@ function summarize(
   status: TurnStatus | null,
   usage: Usage,
   effort: string,
+  model: string,
   stopped = false,
 ): string {
-  const parts = [stopped ? "⏹" : ok ? "✅" : "⚠️", humanMs(status?.elapsedMs ?? 0), `⚙️ ${effort}`];
+  const parts = [
+    stopped ? "⏹" : ok ? "✅" : "⚠️",
+    humanMs(status?.elapsedMs ?? 0),
+    `🤖 ${model}`,
+    `⚙️ ${effort}`,
+  ];
   if (status && status.toolCalls > 0) parts.push(`🔧 ${status.toolCalls}`);
   if (usage.inTokens || usage.outTokens) {
     parts.push(`${fmtTokens(usage.inTokens)}↑ ${fmtTokens(usage.outTokens)}↓`);
@@ -344,7 +393,13 @@ const live = new Map<number, TopicSession>();
 /** The live session for a topic, started (or resumed) on demand. */
 export function sessionFor(
   bot: Bot,
-  topic: { thread_id: number; cwd: string; session_id: string | null; effort?: Effort },
+  topic: {
+    thread_id: number;
+    cwd: string;
+    session_id: string | null;
+    effort?: Effort;
+    model?: Model;
+  },
 ): TopicSession {
   const existing = live.get(topic.thread_id);
   if (existing) return existing;
@@ -354,6 +409,7 @@ export function sessionFor(
     topic.cwd,
     topic.session_id,
     topic.effort ?? null,
+    topic.model ?? null,
   );
   live.set(topic.thread_id, s);
   return s;

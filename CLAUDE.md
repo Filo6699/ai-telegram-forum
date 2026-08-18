@@ -13,7 +13,9 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 | `src/install-command.ts` | writes the `/telegramify` slash command for Claude Code |
 | `src/heartbeat.ts` | broker liveness file: written by the bot, read by the CLI |
 | `src/permission.ts` | tool approval prompts + their inline buttons |
-| `src/effort.ts` | reasoning-effort pickers, `/effort`, level parsing |
+| `src/picker.ts` | the inline-button picker `/effort` and `/model` are built on |
+| `src/effort.ts` | reasoning-effort buttons, `/effort`, level parsing |
+| `src/model.ts` | model buttons, `/model`, model-name parsing |
 | `src/claude.ts` | SDK options: model, effort, permission policy, usage accounting |
 | `src/tg-tools.ts` | in-process MCP server — the agent's own `send` tool |
 | `src/status.ts` | the live status line / turn summary message |

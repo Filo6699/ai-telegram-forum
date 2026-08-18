@@ -96,18 +96,20 @@ with the time until each resets. Those come from claude.ai, so they cover all yo
 Code activity, not just this bot; on an API-key or Bedrock/Vertex setup there
 are no plan limits and that part is left out.
 
-**Reasoning effort.** Every new session opens with a row of buttons in the
-launcher — `low`, `medium`, `high`, `xhigh`, `max`, ticked on the one already in
-force — and the topic is only created once that's settled. Ignore it and the
-session starts a few seconds later on exactly that level: the bot keeps no
-default of its own, so nothing is passed and the CLI resolves it as usual. The
+**Model and reasoning effort.** Every new session opens with one picker in the
+launcher — the models on top, then `low`, `medium`, `high`, `xhigh`, `max`, each
+row ticked on what's already in force — and the topic is only created once
+that's settled. One message and one wait for both. Ignore it and the
+session starts a few seconds later on exactly what's ticked: `MODEL` from your
+`.env` for the model, and for the effort no level at all — the bot keeps no
+default of its own, so nothing is passed and the CLI resolves it as usual. That
 tick is read from the same settings files the CLI reads (`effortLevel` in the
 managed, project and user `settings.json`), which is why a level you set in a
 terminal shows up here. Touch a button and the launch waits for you: press
-levels until you're happy, then **Confirm**, or just stop pressing and it goes
+buttons until you're happy, then **Confirm**, or just stop pressing and it goes
 with your last pick a minute later. Once it's settled that same message turns
-into the launch line — `→ «title» (cwd: …) ⚙️ high` — so a launch is one message
-in the launcher, not a picker plus a note.
+into the launch line — `→ «title» (cwd: …) 🤖 Opus 5 ⚙️ high` — so a launch is
+one message in the launcher, not a picker plus a note.
 
 `/effort high` sets it without the buttons; `/effort` alone brings them up.
 `/effort default` hands the choice back to your settings.
@@ -117,6 +119,14 @@ session comes back on it after an idle shutdown. In the launcher it applies to
 the *next* session only, once, and shows up pre-selected in that launch's
 picker. The level a turn ran
 on appears in its summary line and in `/usage`.
+
+`/model` works the same way, one for one: `/model sonnet` (or `opus`, `haiku`,
+`fable`, or a full `claude-…` id) sets it, `/model` alone brings up the buttons,
+`/model default` hands it back to `MODEL` from your `.env` — which is what the
+tick sits on when nothing is picked, so the default is a button like any other.
+Inside a topic it swaps the model on the live session from the next turn on and
+is remembered across an idle shutdown; in the launcher it pre-selects the next
+launch's picker. The model a turn ran on is in its summary line and in `/usage`.
 
 `/stop`, inside a topic, interrupts the turn running there — the running tool is
 aborted, any permission prompt still open is denied, and messages you sent while
@@ -219,7 +229,9 @@ finish.
 | `src/heartbeat.ts` | is the broker running? (written by the bot, read by the CLI) |
 | `src/install-command.ts` | install the `/telegramify` slash command |
 | `src/permission.ts` | tool approval prompts (inline buttons) |
-| `src/effort.ts` | reasoning-effort pickers and `/effort` |
+| `src/picker.ts` | the inline-button picker `/effort` and `/model` share |
+| `src/effort.ts` | reasoning-effort buttons and `/effort` |
+| `src/model.ts` | model buttons and `/model` |
 | `src/claude.ts` | SDK options: model, effort, permissions, usage accounting |
 | `src/tg-tools.ts` | in-process MCP server: the agent's own `send` tool (text + files) |
 | `src/status.ts` | live status line, then the turn summary |

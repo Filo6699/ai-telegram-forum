@@ -4,22 +4,39 @@ import { cfg } from "./config.ts";
 import { fetchImage, isSupportedImage, type ImagePart } from "./media.ts";
 import { placeholderTitle, resolveCwd } from "./cwd.ts";
 import {
-  askEffort,
+  asEffort,
   defaultEffort,
+  effortGroup,
   effortLabel,
   effortUsage,
-  LAUNCH_WAIT_MS,
   parseEffort,
-  registerEffortButtons,
   type Effort,
 } from "./effort.ts";
+import {
+  asModel,
+  defaultModel,
+  modelGroup,
+  modelLabel,
+  modelUsage,
+  parseModel,
+  type Model,
+} from "./model.ts";
+import { askPick, LAUNCH_WAIT_MS, registerPickerButtons } from "./picker.ts";
 import { fmtTokens } from "./fmt.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { fetchPlanLimits, planLimitsText } from "./limits.ts";
 import { registerPermissionButtons } from "./permission.ts";
 import { liveSession, sessionFor } from "./session.ts";
 import { startSweep } from "./sweep.ts";
-import { createTopic, getTopic, setEffort, setStatus, totals, type Topic } from "./db.ts";
+import {
+  createTopic,
+  getTopic,
+  setEffort,
+  setModel,
+  setStatus,
+  totals,
+  type Topic,
+} from "./db.ts";
 
 const bot = new Bot(cfg.token);
 
@@ -32,6 +49,7 @@ function topicUsageText(t: Topic): string {
   return (
     `📊 *${t.title}*\n` +
     `turns: ${t.turns}\n` +
+    `model: ${modelLabel(t.model, defaultModel())}\n` +
     `effort: ${effortLabel(t.effort, defaultEffort(t.cwd))}\n` +
     `tokens: ${fmt(t.in_tokens)} in / ${fmt(t.out_tokens)} out\n` +
     `cost: $${t.cost_usd.toFixed(4)}`
@@ -43,6 +61,7 @@ function totalsText(): string {
   return (
     `📊 *All topics*\n` +
     `topics: ${s.topics} · turns: ${s.turns}\n` +
+    `next session model: ${modelLabel(nextModel ?? null, defaultModel())}\n` +
     `next session effort: ${effortLabel(nextEffort ?? null, defaultEffort(cfg.defaultCwd))}\n` +
     `tokens: ${fmt(s.in_tokens)} in / ${fmt(s.out_tokens)} out\n` +
     `cost: $${s.cost_usd.toFixed(4)}`
@@ -50,15 +69,24 @@ function totalsText(): string {
 }
 
 /**
- * `/effort` in the launcher belongs to the next session only: it is consumed by
- * the launch that follows, where it arrives as the picker's pre-selection.
+ * `/effort` and `/model` in the launcher belong to the next session only: they
+ * are consumed by the launch that follows, where they arrive as the picker's
+ * pre-selection.
  */
 let nextEffort: Effort | undefined;
+let nextModel: Model | undefined;
 
-function takeNextEffort(): Effort {
-  const e = nextEffort ?? null;
-  nextEffort = undefined;
-  return e;
+/**
+ * Where a `/effort` or `/model` lands. `null` is the launcher — the choice is
+ * held for the next session; `undefined` means there is nowhere to put it, and
+ * the caller has already said so.
+ */
+async function target(ctx: any, thread: number | undefined): Promise<Topic | null | undefined> {
+  if (isLauncher(thread)) return null;
+  const t = getTopic(thread!);
+  if (t) return t;
+  await ctx.reply("⚠️ run this inside a session topic, not here.", { message_thread_id: thread });
+  return undefined;
 }
 
 /**
@@ -73,7 +101,9 @@ async function applyEffort(
   level: Effort,
   announce = true,
 ): Promise<void> {
-  if (isLauncher(thread)) {
+  const t = await target(ctx, thread);
+  if (t === undefined) return;
+  if (t === null) {
     nextEffort = level;
     if (announce) {
       const label = effortLabel(level, defaultEffort(cfg.defaultCwd));
@@ -81,18 +111,39 @@ async function applyEffort(
     }
     return;
   }
-  const t = getTopic(thread!);
-  if (!t) {
-    await ctx.reply("⚠️ run this inside a session topic, not here.", {
-      message_thread_id: thread,
-    });
-    return;
-  }
-  const s = liveSession(thread!);
+  const s = liveSession(t.thread_id);
   if (s) s.setEffort(level);
-  else setEffort(thread!, level);
+  else setEffort(t.thread_id, level);
   if (announce) {
     await ctx.reply(`⚙️ effort: ${effortLabel(level, defaultEffort(t.cwd))}`, {
+      message_thread_id: thread,
+    });
+  }
+}
+
+/** The same, for the model — a live session swaps it on the child in place. */
+async function applyModel(
+  ctx: any,
+  thread: number | undefined,
+  model: Model,
+  announce = true,
+): Promise<void> {
+  const t = await target(ctx, thread);
+  if (t === undefined) return;
+  if (t === null) {
+    nextModel = model;
+    if (announce) {
+      await ctx.reply(`🤖 next session: ${modelLabel(model, defaultModel())}`, {
+        message_thread_id: thread,
+      });
+    }
+    return;
+  }
+  const s = liveSession(t.thread_id);
+  if (s) s.setModel(model);
+  else setModel(t.thread_id, model);
+  if (announce) {
+    await ctx.reply(`🤖 model: ${modelLabel(model, defaultModel())}`, {
       message_thread_id: thread,
     });
   }
@@ -164,28 +215,39 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
     return true;
   }
 
-  if (cmd === "/effort") {
+  if (cmd === "/effort" || cmd === "/model") {
     const arg = ctx.message.text.trim().split(/\s+/)[1];
+    const isEffort = cmd === "/effort";
     if (arg) {
-      const level = parseEffort(arg);
-      if (level === undefined) {
-        await ctx.reply(effortUsage, { message_thread_id: thread });
+      const value = isEffort ? parseEffort(arg) : parseModel(arg);
+      if (value === undefined) {
+        await ctx.reply(isEffort ? effortUsage : modelUsage, { message_thread_id: thread });
         return true;
       }
-      await applyEffort(ctx, thread, level);
+      if (isEffort) await applyEffort(ctx, thread, value as Effort);
+      else await applyModel(ctx, thread, value as Model);
       return true;
     }
-    // No level given — same effect, chosen with the buttons instead.
+    // Nothing named — same effect, chosen with the buttons instead. Detached
+    // like the launch picker: waiting on a button from inside a handler would
+    // block the very callback that settles it.
     const inLauncher = isLauncher(thread);
     const topic = inLauncher ? undefined : getTopic(thread!);
-    void askEffort(bot, {
+    const where = inLauncher ? "the next session" : "this topic";
+    const cwd = topic?.cwd ?? cfg.defaultCwd;
+    void askPick(bot, {
       threadId: thread,
-      title: inLauncher ? "effort for the next session" : "effort for this topic",
-      initial: inLauncher ? (nextEffort ?? null) : (topic?.effort ?? null),
-      cwd: topic?.cwd ?? cfg.defaultCwd,
+      title: `${isEffort ? "effort" : "model"} for ${where}`,
+      groups: isEffort
+        ? [effortGroup(inLauncher ? (nextEffort ?? null) : (topic?.effort ?? null), cwd)]
+        : [modelGroup(inLauncher ? (nextModel ?? null) : (topic?.model ?? null))],
     })
-      .then(({ level }) => applyEffort(ctx, thread, level, false))
-      .catch((err) => console.warn("[effort] applying the picked level failed:", String(err)));
+      .then(({ picks }) =>
+        isEffort
+          ? applyEffort(ctx, thread, asEffort(picks.e ?? null), false)
+          : applyModel(ctx, thread, asModel(picks.m ?? null), false),
+      )
+      .catch((err) => console.warn(`[${cmd}] applying the picked value failed:`, String(err)));
     return true;
   }
 
@@ -264,26 +326,33 @@ async function launch(ctx: any, text: string, images: ImagePart[]): Promise<void
   const { cwd, prompt } = resolveCwd(text);
   const title = placeholderTitle(prompt || "image");
 
-  // Nothing exists yet: the effort is chosen first, and only then is the topic
-  // created. An untouched picker falls through in seconds, so a launch nobody
-  // answers still starts — but once the user reaches for a button, the launch
-  // waits for them to finish.
-  const { level: effort, messageId } = await askEffort(bot, {
+  // Nothing exists yet: the model and the effort are chosen first — in one
+  // picker, so a launch costs one message and one wait — and only then is the
+  // topic created. An untouched picker falls through in seconds, so a launch
+  // nobody answers still starts, but once the user reaches for a button the
+  // launch waits for them to finish.
+  const { picks, messageId } = await askPick(bot, {
     threadId: cfg.launcherThreadId,
-    title: `effort for «${title}»`,
-    initial: takeNextEffort(),
-    cwd,
+    title: `«${title}»`,
+    groups: [modelGroup(nextModel ?? null), effortGroup(nextEffort ?? null, cwd)],
     firstWaitMs: LAUNCH_WAIT_MS,
     rewritten: true,
   });
+  const effort = asEffort(picks.e ?? null);
+  const model = asModel(picks.m ?? null);
+  nextEffort = undefined;
+  nextModel = undefined;
 
   const topic = await ctx.api.createForumTopic(cfg.chatId, title);
   const tid = topic.message_thread_id;
-  createTopic({ threadId: tid, cwd, title, effort });
+  createTopic({ threadId: tid, cwd, title, effort, model });
 
   // The picker becomes the launch line: one message for one launch, rather than
   // the settled picker and a "→ …" note sitting one above the other.
-  const line = `→ «${title}»  (cwd: ${cwd})  ⚙️ ${effortLabel(effort, defaultEffort(cwd))}`;
+  const line =
+    `→ «${title}»  (cwd: ${cwd})` +
+    `  🤖 ${modelLabel(model, defaultModel())}` +
+    `  ⚙️ ${effortLabel(effort, defaultEffort(cwd))}`;
   const posted =
     messageId !== null &&
     (await ctx.api
@@ -307,7 +376,7 @@ async function launch(ctx: any, text: string, images: ImagePart[]): Promise<void
     console.warn(`[launch] echoing the prompt into ${tid} failed:`, String(err));
   }
 
-  await sessionFor(bot, { thread_id: tid, cwd, session_id: null, effort }).send(
+  await sessionFor(bot, { thread_id: tid, cwd, session_id: null, effort, model }).send(
     contentOf(prompt, images),
   );
 }
@@ -409,14 +478,15 @@ async function main() {
   await bot.api.setMyCommands([
     { command: "usage", description: "Tokens/cost here (or all in the launcher) + plan limits" },
     { command: "effort", description: "Reasoning effort: /effort high, or /effort for buttons" },
+    { command: "model", description: "Model: /model sonnet, or /model for buttons" },
     { command: "stop", description: "Interrupt the turn running in this topic" },
     { command: "resume", description: "Shell command to continue this session in a terminal" },
     { command: "id", description: "Claude session id of this topic" },
   ]);
 
-  // Effort first: it passes callbacks it doesn't own on to the permission
+  // Pickers first: they pass callbacks they don't own on to the permission
   // buttons, which answer everything else.
-  registerEffortButtons(bot);
+  registerPickerButtons(bot);
   registerPermissionButtons(bot);
   startSweep(bot);
   // From here on `/telegramify` will adopt sessions into this forum.
