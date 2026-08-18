@@ -124,12 +124,23 @@ async function sessionTopic(ctx: any, thread: number | undefined): Promise<Topic
   return t;
 }
 
+/**
+ * Run a leading `/command`, and say whether it was one of ours.
+ *
+ * `false` means "not mine, route it as a prompt" — a launcher message may start
+ * with a `/path` cwd prefix, and swallowing those is how a session goes silent.
+ */
 async function handleCommand(ctx: any, thread: number | undefined): Promise<boolean> {
-  const raw = ctx.message.text.trim().split(/\s+/)[0].toLowerCase();
-  // `/cmd@thisbot` is the same command; anything addressed to another bot isn't.
-  const at = raw.indexOf("@");
-  if (at !== -1 && raw.slice(at + 1) !== botUsername.toLowerCase()) return false;
-  const cmd = at === -1 ? raw : raw.slice(0, at);
+  const raw = ctx.message.text.trim().split(/\s+/)[0];
+  // A bot command is one word: `/name`, optionally `@addressed` to a bot. A
+  // path prefix (`/srv/app …`) has slashes inside it, so it never matches.
+  const parts = raw.match(/^\/([a-z0-9_]+)(?:@([a-z0-9_]+))?$/i);
+  if (!parts) return false;
+  const [, name, addressee] = parts as unknown as [string, string, string | undefined];
+  // `/cmd@thisbot` is the same command; anything addressed to another bot isn't
+  // ours to answer, but it isn't a prompt either — drop it.
+  if (addressee && addressee.toLowerCase() !== botUsername.toLowerCase()) return true;
+  const cmd = `/${name.toLowerCase()}`;
 
   if (cmd === "/id") {
     const t = await sessionTopic(ctx, thread);
@@ -345,11 +356,9 @@ bot.on("message:text", async (ctx) => {
   if (!mine(ctx)) return;
   const text = ctx.message.text;
 
-  // Commands (e.g. /usage) are handled here; other /… messages are ignored.
-  if (text.startsWith("/")) {
-    await handleCommand(ctx, ctx.message.message_thread_id);
-    return;
-  }
+  // Commands (e.g. /usage) are handled here; anything else that merely starts
+  // with a slash — a `/path` cwd prefix, above all — is a prompt like any other.
+  if (text.startsWith("/") && (await handleCommand(ctx, ctx.message.message_thread_id))) return;
 
   await route(ctx, text, []);
 });
