@@ -310,14 +310,22 @@ export class TopicSession {
 
           case "assistant": {
             await this.beginTurn();
+            const said: string[] = [];
             for (const block of msg.message.content) {
-              if (block.type === "text") this.out.push(block.text);
+              if (block.type === "text") said.push(block.text);
               // Posting the reply is a tool call like any other, but it isn't
               // work the user asked for — keep it out of the count.
               else if (block.type === "tool_use" && block.name !== TG_SEND_TOOL) {
                 this.status?.tool(block.name);
               }
             }
+            // Hold the newest reply, replacing the last one — and only the main
+            // agent's. What it writes between tool calls is thinking out loud,
+            // and a subagent's text was never addressed to the topic; posting
+            // the lot as the fallback is how a quiet turn ended up dumping a
+            // wall of step-by-step narration.
+            const text = said.join("");
+            if (text.trim() && !msg.parent_tool_use_id) this.out.hold(text);
             break;
           }
 
@@ -329,7 +337,7 @@ export class TopicSession {
             // result still holds it in full.
             if (ok && this.out.isEmpty) {
               const text = (msg as any).result;
-              if (typeof text === "string") this.out.push(text);
+              if (typeof text === "string") this.out.hold(text);
             }
             if (!ok && !this.stopped) {
               this.failure = `⚠️ ${msg.subtype}: ${(msg as any).error ?? ""}`;

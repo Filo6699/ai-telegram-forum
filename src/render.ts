@@ -8,6 +8,43 @@ const TG_LIMIT = 4096;
 const RAW_CHUNK = 2800; // raw markdown per message; formatted stays under TG_LIMIT
 const CAPTION_LIMIT = 1024; // Telegram's cap on a caption, formatting included
 const ALBUM_MAX = 10; // media per sendMediaGroup call
+const RETRY_PAD_MS = 500; // slack past Telegram's own retry_after
+const SEND_WAIT_MS = 90_000; // how long a real message will wait out a rate limit
+const SEND_TRIES = 3;
+
+/**
+ * Telegram rate-limits per chat, and every topic in the forum shares that one
+ * budget. A 429 anywhere therefore parks *everything* until the window passes:
+ * hammering on regardless is what turns one 429 into a stream of them.
+ */
+let gateUntil = 0;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Milliseconds Telegram asked us to hold off, or null if this isn't a 429. */
+function retryAfterMs(err: unknown): number | null {
+  const secs = (err as { parameters?: { retry_after?: number } })?.parameters?.retry_after;
+  if (typeof secs === "number") return secs * 1000 + RETRY_PAD_MS;
+  const m = /retry after (\d+)/i.exec(String(err));
+  return m ? Number(m[1]) * 1000 + RETRY_PAD_MS : null;
+}
+
+function noteLimit(ms: number): void {
+  gateUntil = Math.max(gateUntil, Date.now() + ms);
+  console.warn(`[render] rate-limited, holding this chat for ${Math.ceil(ms / 1000)}s`);
+}
+
+/** How long the chat is still parked; 0 when it's free. */
+export const gateMs = (): number => Math.max(0, gateUntil - Date.now());
+
+/** Wait out the current window. False means it's longer than we're willing to wait. */
+async function waitGate(budgetMs: number): Promise<boolean> {
+  const wait = gateMs();
+  if (wait === 0) return true;
+  if (wait > budgetMs) return false;
+  await sleep(wait);
+  return true;
+}
 
 /** Run a renderer, returning null if it throws or produces nothing. */
 function safeRender(fn: (s: string) => string, raw: string): string | null {
@@ -66,10 +103,10 @@ function albums(files: OutgoingFile[]): OutgoingFile[][] {
  * Telegram HTML → plain text, so a message is never lost to a formatting error.
  *
  * Two ways in. `sendText` posts immediately — that is what the agent's
- * `mcp__tg__send` tool uses, and what makes a topic feel live. `push`/`send`
- * buffer a whole turn and post it at the end; that path is the fallback for a
- * turn where the agent never spoke through the tool, so a reply the session
- * recorded can't be dropped on the floor.
+ * `mcp__tg__send` tool uses, and what makes a topic feel live. `hold`/`send`
+ * keep the turn's latest reply and post it at the end; that path is the
+ * fallback for a turn where the agent never spoke through the tool, so a reply
+ * the session recorded can't be dropped on the floor.
  */
 export class TopicRenderer {
   private buffer = "";
@@ -80,8 +117,14 @@ export class TopicRenderer {
     private threadId: number,
   ) {}
 
-  push(text: string): void {
-    this.buffer += text;
+  /**
+   * Keep `text` as the turn's fallback reply, *replacing* whatever was held.
+   * Only the agent's latest word is owed to the user: appending every assistant
+   * message instead would post the whole between-tools commentary as one wall
+   * of text the moment a turn ends without a `send`.
+   */
+  hold(text: string): void {
+    this.buffer = text;
   }
 
   clear(): void {
@@ -132,15 +175,26 @@ export class TopicRenderer {
   private async sendOne(raw: string): Promise<number | null> {
     for (const { text, mode } of tiers(raw)) {
       if (!text || (mode && text.length > TG_LIMIT)) continue;
-      try {
-        const sent = await this.bot.api.sendMessage(this.chatId, text, {
-          message_thread_id: this.threadId,
-          ...(mode ? { parse_mode: mode } : {}),
-        });
-        return sent.message_id;
-      } catch (err) {
-        const next = mode === "MarkdownV2" ? "HTML" : mode === "HTML" ? "plain" : "nothing";
-        console.warn(`[render] ${mode ?? "plain"} rejected, falling back to ${next}:`, String(err));
+      // A 429 says nothing about the rendering: wait it out and retry the same
+      // tier, rather than degrading a message that would have arrived fine.
+      for (let attempt = 0; attempt < SEND_TRIES; attempt++) {
+        if (!(await waitGate(SEND_WAIT_MS))) return null;
+        try {
+          const sent = await this.bot.api.sendMessage(this.chatId, text, {
+            message_thread_id: this.threadId,
+            ...(mode ? { parse_mode: mode } : {}),
+          });
+          return sent.message_id;
+        } catch (err) {
+          const wait = retryAfterMs(err);
+          if (wait !== null) {
+            noteLimit(wait);
+            continue;
+          }
+          const next = mode === "MarkdownV2" ? "HTML" : mode === "HTML" ? "plain" : "nothing";
+          console.warn(`[render] ${mode ?? "plain"} rejected, falling back to ${next}:`, String(err));
+          break;
+        }
       }
     }
     return null;
@@ -246,8 +300,27 @@ export class TopicRenderer {
   /**
    * Rewrite an earlier message. Used for the live status line, which is edited
    * many times per turn — edits don't notify, so this stays quiet.
+   *
+   * `waitMs` is how long the caller is willing to sit out a rate limit. The
+   * live line passes 0: it is disposable, and there'll be another refresh along
+   * shortly. The turn summary is the one edit worth waiting for.
    */
-  async edit(messageId: number, raw: string): Promise<boolean> {
+  async edit(messageId: number, raw: string, waitMs = 0): Promise<boolean> {
+    const giveUpAt = Date.now() + waitMs;
+    for (;;) {
+      if (!(await waitGate(Math.max(0, giveUpAt - Date.now())))) return false;
+      const done = await this.editOnce(messageId, raw);
+      if (done !== "limited") return done;
+      if (Date.now() >= giveUpAt) return false;
+    }
+  }
+
+  /**
+   * One pass down the rendering tiers. `"limited"` means Telegram is throttling
+   * us — no rendering will help, so the remaining tiers are abandoned instead of
+   * spending two more calls to collect two more 429s.
+   */
+  private async editOnce(messageId: number, raw: string): Promise<boolean | "limited"> {
     for (const { text, mode } of tiers(flattenTables(raw).slice(0, RAW_CHUNK))) {
       if (!text || (mode && text.length > TG_LIMIT)) continue;
       try {
@@ -256,6 +329,11 @@ export class TopicRenderer {
         });
         return true;
       } catch (err) {
+        const wait = retryAfterMs(err);
+        if (wait !== null) {
+          noteLimit(wait);
+          return "limited";
+        }
         const msg = String(err);
         // Editing to identical content is a no-op, not a failure.
         if (msg.includes("message is not modified")) return true;

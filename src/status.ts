@@ -1,8 +1,16 @@
 import { humanMs } from "./fmt.ts";
-import type { TopicRenderer } from "./render.ts";
+import { gateMs, type TopicRenderer } from "./render.ts";
 
-/** How often the live line may be rewritten. Telegram rate-limits edits. */
-const EDIT_INTERVAL_MS = 3000;
+/**
+ * How often the live line may be rewritten. Telegram allows roughly 20 calls a
+ * minute per chat — and every topic in the forum, plus the agent's own
+ * messages, draws on that same budget. One refresh per 8s per turn leaves room
+ * for the things the user actually reads.
+ */
+const EDIT_INTERVAL_MS = 8000;
+
+/** How long the turn summary is willing to sit out a rate limit. */
+const SUMMARY_WAIT_MS = 60_000;
 
 /** Tool names listed individually in the live line; the rest fold into a count. */
 const NAMED_TOOLS = 3;
@@ -23,6 +31,7 @@ export class TurnStatus {
   private counts = new Map<string, number>();
   private total = 0;
   private lastEditAt = 0;
+  private lastText = "";
   private timer: ReturnType<typeof setTimeout> | null = null;
   private done = false;
 
@@ -38,7 +47,8 @@ export class TurnStatus {
 
   /** Post the placeholder. Called as soon as the turn starts, so the topic reacts at once. */
   async start(): Promise<void> {
-    this.messageId = await this.out.sendText("⏳ …");
+    this.lastText = "⏳ …";
+    this.messageId = await this.out.sendText(this.lastText);
     this.lastEditAt = Date.now();
   }
 
@@ -60,19 +70,28 @@ export class TurnStatus {
     return `⏳ ${humanMs(this.elapsedMs)}${tools}`;
   }
 
+  /**
+   * Queue a refresh. Calls that land inside the interval coalesce into the one
+   * pending timer, so a burst of twenty tool calls still costs a single edit —
+   * and while the chat is rate-limited, the wait stretches to cover that too.
+   */
   private schedule(): void {
     if (this.done || this.timer) return;
-    const wait = Math.max(0, EDIT_INTERVAL_MS - (Date.now() - this.lastEditAt));
+    const wait = Math.max(EDIT_INTERVAL_MS - (Date.now() - this.lastEditAt), gateMs());
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.flush(this.liveText());
-    }, wait);
+    }, Math.max(0, wait));
   }
 
-  private async flush(text: string): Promise<void> {
+  private async flush(text: string, waitMs = 0): Promise<void> {
     if (this.messageId === null) return;
+    // An edit to text Telegram already shows is a wasted call against the
+    // chat's budget, and it comes back as an error besides.
+    if (text === this.lastText) return;
     this.lastEditAt = Date.now();
-    await this.out.edit(this.messageId, text);
+    this.lastText = text;
+    if (!(await this.out.edit(this.messageId, text, waitMs))) this.lastText = "";
   }
 
   /**
@@ -91,6 +110,7 @@ export class TurnStatus {
       await this.out.sendText(summary);
       return;
     }
-    await this.flush(summary);
+    // The one edit worth waiting for: it's the whole record of the turn.
+    await this.flush(summary, SUMMARY_WAIT_MS);
   }
 }
