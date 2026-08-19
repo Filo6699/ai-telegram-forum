@@ -2,12 +2,22 @@ import { humanMs } from "./fmt.ts";
 import { gateMs, type TopicRenderer } from "./render.ts";
 
 /**
- * How often the live line may be rewritten. Telegram allows roughly 20 calls a
- * minute per chat — and every topic in the forum, plus the agent's own
- * messages, draws on that same budget. One refresh per 8s per turn leaves room
- * for the things the user actually reads.
+ * How often the live line may be rewritten, by how long the turn has been
+ * running. Telegram allows roughly 20 calls a minute per chat — and every topic
+ * in the forum, plus the agent's own messages, draws on that same budget.
+ *
+ * The refresh rate is worth spending early, when the user is still watching to
+ * see the turn take hold; a turn that has been grinding for twenty minutes is
+ * being checked on occasionally, not watched, so it gets out of the way.
  */
-const EDIT_INTERVAL_MS = 8000;
+const EDIT_STEPS: Array<{ after: number; every: number }> = [
+  { after: 20 * 60_000, every: 3 * 60_000 },
+  { after: 60_000, every: 60_000 },
+  { after: 0, every: 10_000 },
+];
+
+const editInterval = (elapsedMs: number): number =>
+  EDIT_STEPS.find((s) => elapsedMs >= s.after)!.every;
 
 /** How long the turn summary is willing to sit out a rate limit. */
 const SUMMARY_WAIT_MS = 60_000;
@@ -77,7 +87,8 @@ export class TurnStatus {
    */
   private schedule(): void {
     if (this.done || this.timer) return;
-    const wait = Math.max(EDIT_INTERVAL_MS - (Date.now() - this.lastEditAt), gateMs());
+    const since = Date.now() - this.lastEditAt;
+    const wait = Math.max(editInterval(this.elapsedMs) - since, gateMs());
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.flush(this.liveText());
