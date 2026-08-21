@@ -2,10 +2,11 @@ import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Bot } from "grammy";
 import { cfg } from "./config.ts";
 import {
+  classify,
   fetchDocument,
   fetchImage,
   humanSize,
-  isSupportedImage,
+  isService,
   type DocumentPart,
   type ImagePart,
 } from "./media.ts";
@@ -369,15 +370,18 @@ async function launch(ctx: any, text: string, images: ImagePart[]): Promise<void
   if (!posted) await ctx.reply(line, { message_thread_id: cfg.launcherThreadId });
 
   // The launcher message lives in another topic — repeat it here so the
-  // thread reads as a whole conversation. Anything with an attachment is
-  // copied verbatim; plain text is re-sent without its cwd prefix.
+  // thread reads as a whole conversation.
+  const echoText = () => ctx.api.sendMessage(cfg.chatId, prompt, { message_thread_id: tid });
   try {
-    if (ctx.message.photo || ctx.message.document) {
-      await ctx.api.copyMessage(cfg.chatId, cfg.chatId, ctx.message.message_id, {
-        message_thread_id: tid,
-      });
+    // An attachment is copied verbatim — a poll or a live location can refuse
+    // to be copied, and then the prompt text stands in for it. Plain text is
+    // re-sent without its cwd prefix.
+    if (ctx.message.text === undefined) {
+      await ctx.api
+        .copyMessage(cfg.chatId, cfg.chatId, ctx.message.message_id, { message_thread_id: tid })
+        .catch(echoText);
     } else {
-      await ctx.api.sendMessage(cfg.chatId, prompt, { message_thread_id: tid });
+      await echoText();
     }
   } catch (err) {
     console.warn(`[launch] echoing the prompt into ${tid} failed:`, String(err));
@@ -439,57 +443,72 @@ bot.on("message:text", async (ctx) => {
   await route(ctx, text, []);
 });
 
-/**
- * Photos, and documents Telegram tags as an image (what "send as file" makes).
- * An album arrives as one message per photo; each is its own turn input, which
- * the session hands to the agent together at its next step.
- */
-bot.on(["message:photo", "message:document"], async (ctx) => {
-  if (!mine(ctx)) return;
+/** Caption first, then what came with it: the caption is what titles a topic. */
+const withNote = (caption: string, note: string): string =>
+  caption ? `${caption}\n\n${note}` : note;
 
-  const doc = ctx.message.document;
-  // The last photo size is the largest one Telegram kept.
-  const fileId = doc ? doc.file_id : ctx.message.photo?.at(-1)?.file_id;
-  if (!fileId) return;
+/**
+ * Everything that isn't plain text.
+ *
+ * Each attachment kind takes one of three routes: pixels the model can see go
+ * inside the message, files are saved and handed over as a path to open, and
+ * the metadata-only kinds — a location, a poll, a contact — arrive as the
+ * words that describe them. An album comes in as one message per item; each is
+ * its own turn input, which the session hands to the agent together at its
+ * next step.
+ */
+bot.on("message", async (ctx) => {
+  if (!mine(ctx)) return;
+  const thread = ctx.message.message_thread_id;
   const caption = ctx.message.caption?.trim() ?? "";
 
-  // Anything that isn't an image goes to the agent as a path it can open. It
-  // used to be dropped here, which meant a message carrying a file — the whole
-  // point of sending it — reached nobody and started no session at all.
-  if (doc && !isSupportedImage(doc.mime_type)) {
-    let file: DocumentPart;
-    try {
-      file = await fetchDocument(ctx.api, doc.file_id, doc.file_unique_id, doc.file_name);
-    } catch (err) {
-      console.warn("[media] fetching the document failed:", String(err));
-      await ctx
-        .reply(`⚠️ couldn't fetch that file: ${String(err)}`, {
-          message_thread_id: ctx.message.message_thread_id,
-        })
-        .catch(() => {});
-      return;
-    }
-    // Name first, path second: a caption-less launch is titled by the file
-    // rather than by a directory nobody reads.
-    const note = `[attached file: ${file.name} (${humanSize(file.size)})]\n${file.path}`;
-    await route(ctx, caption ? `${caption}\n\n${note}` : note, []);
-    return;
-  }
-
-  let image: ImagePart;
-  try {
-    image = await fetchImage(ctx.api, fileId, doc?.mime_type);
-  } catch (err) {
-    console.warn("[media] fetching the image failed:", String(err));
+  const inbound = classify(ctx.message);
+  if (!inbound) {
+    // Telegram's own chatter carries nothing to pass on. Anything else that
+    // got this far is a real message we can't read, and going quiet about it
+    // is exactly how a message full of intent reaches nobody.
+    if (isService(ctx.message)) return;
     await ctx
-      .reply(`⚠️ couldn't fetch that image: ${String(err)}`, {
-        message_thread_id: ctx.message.message_thread_id,
+      .reply("⚠️ I can't read that kind of message — try sending it as a file.", {
+        message_thread_id: thread,
       })
       .catch(() => {});
     return;
   }
 
-  await route(ctx, caption, [image]);
+  if (inbound.as === "text") {
+    await route(ctx, withNote(caption, `[${inbound.label}]`), []);
+    return;
+  }
+
+  if (inbound.as === "image") {
+    let image: ImagePart;
+    try {
+      image = await fetchImage(ctx.api, inbound.fileId, inbound.mime);
+    } catch (err) {
+      console.warn("[media] fetching the image failed:", String(err));
+      await ctx
+        .reply(`⚠️ couldn't fetch that image: ${String(err)}`, { message_thread_id: thread })
+        .catch(() => {});
+      return;
+    }
+    await route(ctx, caption, [image]);
+    return;
+  }
+
+  // Anything with bytes behind it that the model can't look at: saved next to
+  // the bot, named by what it is, and handed over as a path.
+  let file: DocumentPart;
+  try {
+    file = await fetchDocument(ctx.api, inbound);
+  } catch (err) {
+    console.warn(`[media] fetching the ${inbound.kind} failed:`, String(err));
+    await ctx
+      .reply(`⚠️ couldn't fetch that ${inbound.kind}: ${String(err)}`, { message_thread_id: thread })
+      .catch(() => {});
+    return;
+  }
+  await route(ctx, withNote(caption, `[${inbound.label}, ${humanSize(file.size)}]\n${file.path}`), []);
 });
 
 bot.catch((err) => {

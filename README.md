@@ -83,10 +83,18 @@ GIF, WebP) with an optional caption, in the launcher or inside a topic, and the
 agent sees the image itself alongside the caption. An album arrives as several
 messages; the agent gets them together at its next step.
 
-**So do other files.** A document that isn't an image — a `.md` spec, a log, a
-CSV — is saved under `data/inbox/` and handed to the agent as a path, so it
-opens the file with its own tools. Your caption comes with it. Telegram caps
-what a bot may download at 20 MB; over that, you're told rather than ignored.
+**So does everything else you can attach.** A voice message, a video, a music
+file, a GIF, a video note, an animated sticker, a `.md` spec, a CSV — anything
+that isn't an image is saved under `data/inbox/` and handed to the agent as a
+path, prefixed with a line saying what it is: `[voice message (0:12), 45 KB]`.
+Static stickers are pictures, so they go in as pixels. The kinds with no file
+behind them — a location, a venue, a contact, a poll, a dice roll — arrive as
+the words that describe them. Your caption always rides along.
+
+Telegram caps what a bot may download at 20 MB; over that you're told rather
+than ignored, as you are for the few kinds the Bot API won't hand a bot at all
+(a story, say). Nothing is dropped in silence except Telegram's own service
+messages.
 
 **And it sends them back.** The agent can attach local files to anything it
 says — a screenshot it just took, a chart, a log, a PDF. Images and video show

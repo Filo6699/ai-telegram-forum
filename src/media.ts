@@ -1,6 +1,7 @@
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { extname, isAbsolute, join, resolve } from "node:path";
 import type { Api } from "grammy";
+import type { Message } from "grammy/types";
 import { cfg } from "./config.ts";
 
 /** An image handed to the agent as a content block, straight from Telegram. */
@@ -78,21 +79,214 @@ function safeName(name: string | undefined, fallback: string): string {
  */
 export async function fetchDocument(
   api: Api,
-  fileId: string,
-  uniqueId: string,
-  name: string | undefined,
+  file: { fileId: string; uniqueId: string; name?: string; kind: string },
 ): Promise<DocumentPart> {
-  const { buf, filePath } = await download(api, fileId);
-  // Telegram's ids are already url-safe, but they name a directory here, so
+  const { buf, filePath } = await download(api, file.fileId);
+  // Telegram's ids are already url-safe, but this one names a directory, so
   // nothing but the alphabet that makes one is allowed through.
-  const key = uniqueId.replace(/[^\w-]/g, "") || "file";
+  const key = file.uniqueId.replace(/[^\w-]/g, "") || "file";
   const dir = join(resolve(cfg.inboxPath), key);
   mkdirSync(dir, { recursive: true });
-  const safe = safeName(name, safeName(filePath.split("/").pop(), "attachment"));
+  // Only documents and audio carry a name; a voice note or a sticker is named
+  // after what it is, keeping the extension Telegram stored it under so the
+  // agent (and anything it hands the file to) can tell the format.
+  const fallback = `${file.kind}${extname(filePath) || ""}`;
+  const safe = safeName(file.name, safeName(fallback, "attachment"));
   const path = join(dir, safe);
   writeFileSync(path, buf);
   return { path, name: safe, size: buf.length };
 }
+
+// -------------------------------------------------------------- classifying --
+
+/**
+ * What an inbound message carries, once its attachment is recognised.
+ *
+ * Three fates: pixels the model can see travel inside the message; anything
+ * else with bytes behind it is saved and handed over as a path; and the
+ * attachments that are pure metadata — a location, a poll — are already words,
+ * so words are what the agent gets.
+ */
+export type Inbound =
+  | { as: "image"; fileId: string; mime?: string }
+  | { as: "file"; fileId: string; uniqueId: string; kind: string; label: string; name?: string }
+  | { as: "text"; label: string };
+
+/** `0:07`, `3:20`, `1:04:11` — how Telegram itself writes a duration. */
+function mmss(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
+
+/**
+ * Read the one attachment a message carries, whatever kind it is.
+ *
+ * `undefined` means there is nothing here to pass on — a service message, or a
+ * kind the Bot API gives a bot no way to fetch. Order matters: a venue message
+ * also carries a plain `location`, and the venue is the fuller story.
+ */
+export function classify(msg: Message): Inbound | undefined {
+  // The last photo size is the largest one Telegram kept.
+  const photo = msg.photo?.at(-1);
+  if (photo) return { as: "image", fileId: photo.file_id };
+
+  const doc = msg.document;
+  if (doc) {
+    if (isSupportedImage(doc.mime_type)) {
+      return { as: "image", fileId: doc.file_id, mime: doc.mime_type };
+    }
+    return {
+      as: "file",
+      fileId: doc.file_id,
+      uniqueId: doc.file_unique_id,
+      kind: "file",
+      name: doc.file_name,
+      label: `attached file: ${doc.file_name ?? "file"}`,
+    };
+  }
+
+  // A static sticker is a WebP the model can look at. Animated (.tgs) and
+  // video (.webm) ones are formats it can't, so they go over as files.
+  const st = msg.sticker;
+  if (st) {
+    if (!st.is_animated && !st.is_video) return { as: "image", fileId: st.file_id, mime: "image/webp" };
+    return {
+      as: "file",
+      fileId: st.file_id,
+      uniqueId: st.file_unique_id,
+      kind: "sticker",
+      label: `sticker ${st.emoji ?? ""}`.trim(),
+    };
+  }
+
+  const video = msg.video;
+  if (video) {
+    return {
+      as: "file",
+      fileId: video.file_id,
+      uniqueId: video.file_unique_id,
+      kind: "video",
+      name: video.file_name,
+      label: `video (${mmss(video.duration)}, ${video.width}×${video.height})`,
+    };
+  }
+
+  const anim = msg.animation;
+  if (anim) {
+    return {
+      as: "file",
+      fileId: anim.file_id,
+      uniqueId: anim.file_unique_id,
+      kind: "animation",
+      name: anim.file_name,
+      label: `animation (${anim.width}×${anim.height})`,
+    };
+  }
+
+  const round = msg.video_note;
+  if (round) {
+    return {
+      as: "file",
+      fileId: round.file_id,
+      uniqueId: round.file_unique_id,
+      kind: "video_note",
+      label: `video note (${mmss(round.duration)})`,
+    };
+  }
+
+  const audio = msg.audio;
+  if (audio) {
+    const titled = [audio.performer, audio.title].filter(Boolean).join(" — ");
+    return {
+      as: "file",
+      fileId: audio.file_id,
+      uniqueId: audio.file_unique_id,
+      kind: "audio",
+      name: audio.file_name,
+      label: `audio${titled ? `: ${titled}` : ""} (${mmss(audio.duration)})`,
+    };
+  }
+
+  const voice = msg.voice;
+  if (voice) {
+    return {
+      as: "file",
+      fileId: voice.file_id,
+      uniqueId: voice.file_unique_id,
+      kind: "voice",
+      label: `voice message (${mmss(voice.duration)})`,
+    };
+  }
+
+  const venue = msg.venue;
+  if (venue) {
+    const { location: at, title, address } = venue;
+    return { as: "text", label: `venue: ${title}, ${address} (${at.latitude}, ${at.longitude})` };
+  }
+
+  const at = msg.location;
+  if (at) {
+    const live = at.live_period ? ", live" : "";
+    return { as: "text", label: `location: ${at.latitude}, ${at.longitude}${live}` };
+  }
+
+  const who = msg.contact;
+  if (who) {
+    const name = [who.first_name, who.last_name].filter(Boolean).join(" ");
+    return { as: "text", label: `contact: ${name} ${who.phone_number}` };
+  }
+
+  const poll = msg.poll;
+  if (poll) {
+    const options = poll.options.map((o) => o.text).join(" / ");
+    return { as: "text", label: `poll: "${poll.question}" — ${options}` };
+  }
+
+  const dice = msg.dice;
+  if (dice) return { as: "text", label: `dice ${dice.emoji} rolled ${dice.value}` };
+
+  return undefined;
+}
+
+/**
+ * True for a message Telegram generated itself — someone joining, a topic
+ * being created, a pin. There is no attachment in it to miss, so it is dropped
+ * without a word; anything else that `classify` can't read is worth saying so.
+ */
+export function isService(msg: Message): boolean {
+  return SERVICE_KEYS.some((k) => msg[k] !== undefined);
+}
+
+const SERVICE_KEYS = [
+  "new_chat_members",
+  "left_chat_member",
+  "new_chat_title",
+  "new_chat_photo",
+  "delete_chat_photo",
+  "pinned_message",
+  "forum_topic_created",
+  "forum_topic_edited",
+  "forum_topic_closed",
+  "forum_topic_reopened",
+  "general_forum_topic_hidden",
+  "general_forum_topic_unhidden",
+  "message_auto_delete_timer_changed",
+  "migrate_to_chat_id",
+  "migrate_from_chat_id",
+  "successful_payment",
+  "users_shared",
+  "chat_shared",
+  "write_access_allowed",
+  "proximity_alert_triggered",
+  "video_chat_scheduled",
+  "video_chat_started",
+  "video_chat_ended",
+  "video_chat_participants_invited",
+  "web_app_data",
+] as const satisfies readonly (keyof Message)[];
 
 // ---------------------------------------------------------------- outbound --
 

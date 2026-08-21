@@ -22,7 +22,7 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 | `src/limits.ts` | plan rate limits (5-hour / weekly) behind `/usage` |
 | `src/render.ts` | markdown → topic messages, with format fallback |
 | `src/fmt.ts`    | duration & token formatting |
-| `src/media.ts`  | inbound photos → image blocks, other files → `data/inbox` paths; outbound file paths → uploads |
+| `src/media.ts`  | inbound attachments (images → blocks, files → `data/inbox` paths, the rest → words); outbound file paths → uploads |
 | `src/html.ts`   | markdown → Telegram HTML (fallback when MarkdownV2 fails) |
 | `src/cwd.ts`    | `@alias` / `/path` prefix parsing, titles |
 | `src/db.ts`     | SQLite state (`node:sqlite`) |
@@ -72,6 +72,12 @@ npm run telegramify -- --dry-run # adopt the current terminal session into a top
   the bot resume from the same file and clobber each other's tail. It also
   refuses to run unless `heartbeat.ts` says the bot is up: a topic nobody polls
   looks adopted and answers nothing.
+- **Every inbound message is either read or answered.** `classify()` in
+  `media.ts` gives each attachment kind one of three routes — an image block, a
+  file saved to `data/inbox` and handed over as a path, or a description in
+  words for the kinds with no file behind them. What it can't read gets a reply
+  saying so; only Telegram's own service messages are dropped in silence. A
+  message that vanishes is a session that never starts.
 - Keep it dependency-light and single-user. Don't add a runtime dependency or
   multi-user auth without discussing the design first.
 - Don't touch `.env` or `data/` — both are git-ignored and hold real state.
