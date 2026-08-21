@@ -154,7 +154,8 @@ only once the first turn has recorded a session id.
 ## Moving a terminal session to Telegram (`/telegramify`)
 
 A session you started in the terminal already lives on disk, so adopting it is
-just a matter of binding a topic to its id — nothing is copied or replayed.
+just a matter of binding a topic to its id — nothing is copied or replayed into
+the session.
 
 ```bash
 npm run install-command      # writes ~/.claude/commands/telegramify.md, once
@@ -168,6 +169,11 @@ Then, inside any Claude Code session:
 
 It creates a topic named after the session and prints its link. Keep writing
 there and the same session continues, with its full history.
+
+The new topic opens on the agent's last reply from the terminal, re-posted so
+you're not picking up the thread against a blank screen. Only the finished
+answer travels — not the commentary between tool calls — and a session
+interrupted mid-tool has nothing to carry, so the topic just starts empty.
 
 **The bot has to be running.** Adoption is refused when it isn't — a topic
 nobody polls would just swallow your messages. The running bot keeps

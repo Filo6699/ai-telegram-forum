@@ -1,4 +1,4 @@
-import { type Bot, InputFile } from "grammy";
+import { type Api, InputFile } from "grammy";
 import telegramify from "telegramify-markdown";
 import { toTelegramHtml } from "./html.js";
 import type { MediaKind, OutgoingFile } from "./media.js";
@@ -111,8 +111,10 @@ function albums(files: OutgoingFile[]): OutgoingFile[][] {
 export class TopicRenderer {
   private buffer = "";
 
+  // An `Api`, not a `Bot`: the CLI has no bot to poll with, and posting is all
+  // this needs.
   constructor(
-    private bot: Bot,
+    private api: Api,
     private chatId: number,
     private threadId: number,
   ) {}
@@ -180,7 +182,7 @@ export class TopicRenderer {
       for (let attempt = 0; attempt < SEND_TRIES; attempt++) {
         if (!(await waitGate(SEND_WAIT_MS))) return null;
         try {
-          const sent = await this.bot.api.sendMessage(this.chatId, text, {
+          const sent = await this.api.sendMessage(this.chatId, text, {
             message_thread_id: this.threadId,
             ...(mode ? { parse_mode: mode } : {}),
           });
@@ -225,7 +227,7 @@ export class TopicRenderer {
       const { path, kind } = group[0]!;
       const file = new InputFile(path);
       const opts = { message_thread_id: this.threadId, ...capOpts };
-      const api = this.bot.api;
+      const api = this.api;
       const sent =
         kind === "photo"
           ? await api.sendPhoto(this.chatId, file, opts)
@@ -245,7 +247,7 @@ export class TopicRenderer {
       media: new InputFile(f.path),
       ...(i === 0 ? capOpts : {}),
     }));
-    const sent = await this.bot.api.sendMediaGroup(this.chatId, media as never, {
+    const sent = await this.api.sendMediaGroup(this.chatId, media as never, {
       message_thread_id: this.threadId,
     });
     return sent.map((m) => m.message_id);
@@ -324,7 +326,7 @@ export class TopicRenderer {
     for (const { text, mode } of tiers(flattenTables(raw).slice(0, RAW_CHUNK))) {
       if (!text || (mode && text.length > TG_LIMIT)) continue;
       try {
-        await this.bot.api.editMessageText(this.chatId, messageId, text, {
+        await this.api.editMessageText(this.chatId, messageId, text, {
           ...(mode ? { parse_mode: mode } : {}),
         });
         return true;

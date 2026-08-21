@@ -69,7 +69,7 @@ export class TopicSession {
     private effortLevel: Effort = null,
     private modelId: Model = null,
   ) {
-    this.out = new TopicRenderer(bot, cfg.chatId, threadId);
+    this.out = new TopicRenderer(bot.api, cfg.chatId, threadId);
     this.channel = createTgChannel(this.out, cwd);
   }
 

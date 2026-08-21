@@ -68,7 +68,12 @@ npm run telegramify -- --dry-run # adopt the current terminal session into a top
   never sees anything.
 - **Adoption binds, it doesn't copy.** `/telegramify` only writes a topic row
   pointing at a session id that already exists on disk — never replay or import
-  a transcript. One session id belongs to at most one topic, or the terminal and
+  a transcript *into the session*. The agent's last reply is re-posted into the
+  fresh topic so the handover reads, but that copy goes one way, to Telegram:
+  nothing read out of the transcript is ever fed back in as a prompt. Only a
+  finished answer qualifies — text at the tail of the turn, never the
+  between-tools commentary, and never further back than the current turn.
+  One session id belongs to at most one topic, or the terminal and
   the bot resume from the same file and clobber each other's tail. It also
   refuses to run unless `heartbeat.ts` says the bot is up: a topic nobody polls
   looks adopted and answers nothing.
