@@ -83,6 +83,11 @@ GIF, WebP) with an optional caption, in the launcher or inside a topic, and the
 agent sees the image itself alongside the caption. An album arrives as several
 messages; the agent gets them together at its next step.
 
+**So do other files.** A document that isn't an image — a `.md` spec, a log, a
+CSV — is saved under `data/inbox/` and handed to the agent as a path, so it
+opens the file with its own tools. Your caption comes with it. Telegram caps
+what a bot may download at 20 MB; over that, you're told rather than ignored.
+
 **And it sends them back.** The agent can attach local files to anything it
 says — a screenshot it just took, a chart, a log, a PDF. Images and video show
 up inline, everything else arrives as a file, and its text rides along as the
@@ -238,7 +243,7 @@ finish.
 | `src/limits.ts` | plan rate limits (5-hour / weekly) behind `/usage` |
 | `src/render.ts` | markdown → Telegram messages, with format fallback |
 | `src/fmt.ts`    | duration & token formatting |
-| `src/media.ts`  | inbound photos in, outbound attachments out |
+| `src/media.ts`  | inbound photos & files in, outbound attachments out |
 | `src/cwd.ts`    | parse `@alias` / `/path` prefix, make titles |
 | `src/db.ts`     | SQLite state (`node:sqlite`) |
 | `src/sweep.ts`  | close/delete idle topics, prune transcripts |
@@ -253,7 +258,6 @@ finish.
   (duration, tool calls, tokens, cost) — but there is no token-by-token
   streaming of the reply itself.
 - Bots can't create groups — the forum itself is created by you, once.
-- Text only for now — images and file attachments aren't handled.
 
 ## Security
 

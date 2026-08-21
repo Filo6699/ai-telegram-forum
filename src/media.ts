@@ -1,5 +1,5 @@
-import { statSync } from "node:fs";
-import { extname, isAbsolute, resolve } from "node:path";
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
+import { extname, isAbsolute, join, resolve } from "node:path";
 import type { Api } from "grammy";
 import { cfg } from "./config.ts";
 
@@ -42,14 +42,56 @@ export async function fetchImage(
   fileId: string,
   mime?: string,
 ): Promise<ImagePart> {
+  const { buf, filePath } = await download(api, fileId);
+  return { data: buf.toString("base64"), mediaType: mediaTypeOf(mime, filePath) };
+}
+
+/** Fetch a Telegram file's bytes, plus the remote path Telegram named it by. */
+async function download(api: Api, fileId: string): Promise<{ buf: Buffer; filePath: string }> {
   const file = await api.getFile(fileId);
   if (!file.file_path) throw new Error("Telegram returned no file_path");
   const res = await fetch(
     `https://api.telegram.org/file/bot${cfg.token}/${file.file_path}`,
   );
   if (!res.ok) throw new Error(`downloading the file failed: HTTP ${res.status}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  return { data: buf.toString("base64"), mediaType: mediaTypeOf(mime, file.file_path) };
+  return { buf: Buffer.from(await res.arrayBuffer()), filePath: file.file_path };
+}
+
+/** A non-image attachment, saved where the agent can open it. */
+export type DocumentPart = { path: string; name: string; size: number };
+
+/** Keep a Telegram-supplied name from escaping the inbox directory. */
+function safeName(name: string | undefined, fallback: string): string {
+  const base = (name ?? "").split(/[\\/]/).pop()?.trim() ?? "";
+  const cleaned = base.replace(/[\u0000-\u001f]/g, "").slice(0, 120);
+  return cleaned || fallback;
+}
+
+/**
+ * Save a document Telegram sent and hand back its path.
+ *
+ * Anything that isn't an image can't ride inside the message the way pixels
+ * do, so it lands on disk next to the bot — same machine the session runs on —
+ * and the agent reads it with its own tools. Each file gets its own directory,
+ * keyed by Telegram's unique id, so two `report.md`s never overwrite each
+ * other and the name the user sent survives intact.
+ */
+export async function fetchDocument(
+  api: Api,
+  fileId: string,
+  uniqueId: string,
+  name: string | undefined,
+): Promise<DocumentPart> {
+  const { buf, filePath } = await download(api, fileId);
+  // Telegram's ids are already url-safe, but they name a directory here, so
+  // nothing but the alphabet that makes one is allowed through.
+  const key = uniqueId.replace(/[^\w-]/g, "") || "file";
+  const dir = join(resolve(cfg.inboxPath), key);
+  mkdirSync(dir, { recursive: true });
+  const safe = safeName(name, safeName(filePath.split("/").pop(), "attachment"));
+  const path = join(dir, safe);
+  writeFileSync(path, buf);
+  return { path, name: safe, size: buf.length };
 }
 
 // ---------------------------------------------------------------- outbound --
@@ -82,7 +124,8 @@ const KIND_BY_EXT: Record<string, MediaKind> = {
 const MAX_UPLOAD = 50 * 1024 * 1024;
 const MAX_PHOTO = 10 * 1024 * 1024;
 
-const humanSize = (bytes: number): string => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+export const humanSize = (bytes: number): string =>
+  bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
 /**
  * Turn the paths the agent named into files Telegram will accept.

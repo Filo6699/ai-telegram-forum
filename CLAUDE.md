@@ -22,7 +22,7 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 | `src/limits.ts` | plan rate limits (5-hour / weekly) behind `/usage` |
 | `src/render.ts` | markdown → topic messages, with format fallback |
 | `src/fmt.ts`    | duration & token formatting |
-| `src/media.ts`  | inbound photos → image blocks; outbound file paths → uploads |
+| `src/media.ts`  | inbound photos → image blocks, other files → `data/inbox` paths; outbound file paths → uploads |
 | `src/html.ts`   | markdown → Telegram HTML (fallback when MarkdownV2 fails) |
 | `src/cwd.ts`    | `@alias` / `/path` prefix parsing, titles |
 | `src/db.ts`     | SQLite state (`node:sqlite`) |

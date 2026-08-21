@@ -1,7 +1,14 @@
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Bot } from "grammy";
 import { cfg } from "./config.ts";
-import { fetchImage, isSupportedImage, type ImagePart } from "./media.ts";
+import {
+  fetchDocument,
+  fetchImage,
+  humanSize,
+  isSupportedImage,
+  type DocumentPart,
+  type ImagePart,
+} from "./media.ts";
 import { placeholderTitle, resolveCwd } from "./cwd.ts";
 import {
   asEffort,
@@ -362,10 +369,10 @@ async function launch(ctx: any, text: string, images: ImagePart[]): Promise<void
   if (!posted) await ctx.reply(line, { message_thread_id: cfg.launcherThreadId });
 
   // The launcher message lives in another topic — repeat it here so the
-  // thread reads as a whole conversation. A photo is copied verbatim;
-  // plain text is re-sent without its cwd prefix.
+  // thread reads as a whole conversation. Anything with an attachment is
+  // copied verbatim; plain text is re-sent without its cwd prefix.
   try {
-    if (images.length) {
+    if (ctx.message.photo || ctx.message.document) {
       await ctx.api.copyMessage(cfg.chatId, cfg.chatId, ctx.message.message_id, {
         message_thread_id: tid,
       });
@@ -444,7 +451,30 @@ bot.on(["message:photo", "message:document"], async (ctx) => {
   // The last photo size is the largest one Telegram kept.
   const fileId = doc ? doc.file_id : ctx.message.photo?.at(-1)?.file_id;
   if (!fileId) return;
-  if (doc && !isSupportedImage(doc.mime_type)) return; // not an image — nothing to pass on
+  const caption = ctx.message.caption?.trim() ?? "";
+
+  // Anything that isn't an image goes to the agent as a path it can open. It
+  // used to be dropped here, which meant a message carrying a file — the whole
+  // point of sending it — reached nobody and started no session at all.
+  if (doc && !isSupportedImage(doc.mime_type)) {
+    let file: DocumentPart;
+    try {
+      file = await fetchDocument(ctx.api, doc.file_id, doc.file_unique_id, doc.file_name);
+    } catch (err) {
+      console.warn("[media] fetching the document failed:", String(err));
+      await ctx
+        .reply(`⚠️ couldn't fetch that file: ${String(err)}`, {
+          message_thread_id: ctx.message.message_thread_id,
+        })
+        .catch(() => {});
+      return;
+    }
+    // Name first, path second: a caption-less launch is titled by the file
+    // rather than by a directory nobody reads.
+    const note = `[attached file: ${file.name} (${humanSize(file.size)})]\n${file.path}`;
+    await route(ctx, caption ? `${caption}\n\n${note}` : note, []);
+    return;
+  }
 
   let image: ImagePart;
   try {
@@ -459,7 +489,7 @@ bot.on(["message:photo", "message:document"], async (ctx) => {
     return;
   }
 
-  await route(ctx, ctx.message.caption?.trim() ?? "", [image]);
+  await route(ctx, caption, [image]);
 });
 
 bot.catch((err) => {
