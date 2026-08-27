@@ -229,8 +229,9 @@ active ──idle DELETE_AFTER_HOURS──▶ deleted
 
 A sweep runs every 5 min and only ever deletes — topics are never auto-closed,
 since closing one pushes a Telegram notification for a topic you've already
-stopped using. Deleting also removes the on-disk Claude transcripts for that
-cwd. Default: delete after 7 days idle.
+stopped using. Default: delete after 7 days idle. The Claude session on disk
+survives: deleting a topic drops the Telegram side and nothing else, so the
+transcript stays resumable from the terminal.
 
 Separately, a topic's Claude process is shut down after `SESSION_IDLE_MINUTES`
 (default 20) of silence. That's invisible from Telegram — the next message
@@ -260,7 +261,7 @@ finish.
 | `src/media.ts`  | inbound photos & files in, outbound attachments out |
 | `src/cwd.ts`    | parse `@alias` / `/path` prefix, make titles |
 | `src/db.ts`     | SQLite state (`node:sqlite`) |
-| `src/sweep.ts`  | close/delete idle topics, prune transcripts |
+| `src/sweep.ts`  | delete idle Telegram topics (never their sessions) |
 | `src/config.ts` | env loading & validation |
 
 ## Limitations

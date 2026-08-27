@@ -24,7 +24,7 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 | `src/html.ts`   | markdown → Telegram HTML (fallback when MarkdownV2 fails) |
 | `src/cwd.ts`    | `@alias` / `/path` prefix parsing, titles |
 | `src/db.ts`     | SQLite state (`node:sqlite`) |
-| `src/sweep.ts`  | close/delete idle topics |
+| `src/sweep.ts`  | delete idle Telegram topics (never their sessions) |
 | `src/config.ts` | env loading & validation |
 
 ## Commands
@@ -70,6 +70,13 @@ npm run telegramify -- --dry-run # adopt the current terminal session into a top
   the bot resume from the same file and clobber each other's tail. It also
   refuses to run unless `heartbeat.ts` says the bot is up: a topic nobody polls
   looks adopted and answers nothing.
+- **Never delete a Claude session.** Cleanup deletes Telegram topics and their
+  DB rows — nothing under `~/.claude/projects/`. A transcript is the user's
+  work, it long outlives the topic that happened to be pointed at it, and one
+  cwd's folder holds every session for that project, terminal ones included:
+  deleting it takes out history the bot never created. Sessions end
+  (`endSession`) — they are never removed from disk. Same for `data/inbox`
+  attachments the agent may still be holding a path to.
 - Keep it dependency-light and single-user. Don't add a runtime dependency or
   multi-user auth without discussing the design first.
 - Don't touch `.env` or `data/` — both are git-ignored and hold real state.

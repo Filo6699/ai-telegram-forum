@@ -1,27 +1,9 @@
-import { rm } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { GrammyError, HttpError, type Bot } from "grammy";
 import { cfg } from "./config.ts";
 import { deleteTopic, listStale, type Topic } from "./db.ts";
 import { endSession } from "./session.ts";
 
 const SWEEP_INTERVAL_MS = 5 * 60_000;
-
-/**
- * Claude Code stores session transcripts under
- *   ~/.claude/projects/<cwd-with-slashes-turned-to-dashes>/
- * Remove that folder when a topic is deleted so disk doesn't grow forever.
- */
-async function removeTranscripts(cwd: string): Promise<void> {
-  const encoded = cwd.replace(/\//g, "-");
-  const dir = join(homedir(), ".claude", "projects", encoded);
-  try {
-    await rm(dir, { recursive: true, force: true });
-  } catch (err) {
-    console.warn(`[sweep] could not remove ${dir}:`, String(err));
-  }
-}
 
 /** The topic no longer exists on Telegram — usually deleted by hand. */
 function isTopicGone(err: unknown): boolean {
@@ -40,10 +22,13 @@ function isNetworkDown(err: unknown): boolean {
   return err instanceof HttpError;
 }
 
-/** Drop a topic we can no longer reach: transcripts + DB row. */
-async function forget(t: Topic, reason: string): Promise<void> {
+/**
+ * Drop a topic we can no longer reach: end its session and forget the DB row.
+ * The Claude session on disk is left alone — sweeping is about Telegram
+ * topics, never about transcripts.
+ */
+function forget(t: Topic, reason: string): void {
   endSession(t.thread_id);
-  await removeTranscripts(t.cwd);
   deleteTopic(t.thread_id);
   console.log(`[sweep] forgot topic ${t.thread_id} (${t.title}) — ${reason}`);
 }
@@ -55,12 +40,11 @@ async function sweepOnce(bot: Bot): Promise<void> {
     try {
       await bot.api.deleteForumTopic(cfg.chatId, t.thread_id);
       endSession(t.thread_id);
-      await removeTranscripts(t.cwd);
       deleteTopic(t.thread_id);
       console.log(`[sweep] deleted stale topic ${t.thread_id} (${t.title})`);
     } catch (err) {
       if (isTopicGone(err)) {
-        await forget(t, "already deleted");
+        forget(t, "already deleted");
       } else if (isNetworkDown(err)) {
         console.warn("[sweep] Telegram unreachable, retrying next sweep");
         return;
