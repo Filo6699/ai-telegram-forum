@@ -1,4 +1,4 @@
-import { Bot } from "grammy";
+import { Bot, InlineKeyboard } from "grammy";
 import { cfg } from "./config.ts";
 import { fetchCodexPlanLimits } from "./codex-limits.ts";
 import {
@@ -398,6 +398,36 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
 
 let botUsername = "";
 
+const cancelTurnKeyboard = (threadId: number): InlineKeyboard =>
+  new InlineKeyboard().text("✖️ Cancel", `s:${threadId}`);
+
+/** The first copied prompt can stop its own running turn without typing /stop. */
+function registerSessionCancelButtons(): void {
+  bot.on("callback_query:data", async (ctx, next) => {
+    const match = /^s:(\d+)$/.exec(ctx.callbackQuery.data);
+    if (!match) return next();
+    if (ctx.from.id !== cfg.allowedUserId || ctx.callbackQuery.message?.chat.id !== cfg.chatId) {
+      return void ctx.answerCallbackQuery({ text: "Not authorized." }).catch(() => {});
+    }
+
+    const threadId = Number(match[1]);
+    const session = liveSession(threadId);
+    let stopped = false;
+    try {
+      stopped = (await session?.interrupt()) ?? false;
+    } catch (err) {
+      console.warn(`[cancel] interrupting ${threadId} failed:`, String(err));
+      return void ctx.answerCallbackQuery({ text: "Couldn't stop the turn." }).catch(() => {});
+    }
+
+    if (!stopped) {
+      return void ctx.answerCallbackQuery({ text: "Nothing is running." }).catch(() => {});
+    }
+    await ctx.answerCallbackQuery({ text: "Stopped" }).catch(() => {});
+    await ctx.editMessageReplyMarkup().catch(() => {});
+  });
+}
+
 /** Provider-neutral message; each SDK gets the image representation it accepts. */
 const contentOf = (text: string, images: ImagePart[]): AgentInput => ({ text, images });
 
@@ -420,7 +450,7 @@ async function launch(ctx: any, text: string, images: ImagePart[]): Promise<void
   // topic created. An untouched picker falls through in seconds, so a launch
   // nobody answers still starts, but once the user reaches for a button the
   // launch waits for them to finish.
-  const { picks, messageId } = await askPick(bot, {
+  const { picks, cancelled, messageId } = await askPick(bot, {
     threadId: cfg.launcherThreadId,
     title: `«${title}»`,
     groups: [
@@ -429,7 +459,9 @@ async function launch(ctx: any, text: string, images: ImagePart[]): Promise<void
     ],
     firstWaitMs: LAUNCH_WAIT_MS,
     rewritten: true,
+    allowCancel: true,
   });
+  if (cancelled) return;
   const effort = asEffort(picks.e ?? null, provider);
   const model = asModel(picks.m ?? null);
   nextEffort = undefined;
@@ -457,14 +489,21 @@ async function launch(ctx: any, text: string, images: ImagePart[]): Promise<void
 
   // The launcher message lives in another topic — repeat it here so the
   // thread reads as a whole conversation.
-  const echoText = () => ctx.api.sendMessage(cfg.chatId, prompt, { message_thread_id: tid });
+  const echoText = () =>
+    ctx.api.sendMessage(cfg.chatId, prompt, {
+      message_thread_id: tid,
+      reply_markup: cancelTurnKeyboard(tid),
+    });
   try {
     // An attachment is copied verbatim — a poll or a live location can refuse
     // to be copied, and then the prompt text stands in for it. Plain text is
     // re-sent without its cwd prefix.
     if (ctx.message.text === undefined) {
       await ctx.api
-        .copyMessage(cfg.chatId, cfg.chatId, ctx.message.message_id, { message_thread_id: tid })
+        .copyMessage(cfg.chatId, cfg.chatId, ctx.message.message_id, {
+          message_thread_id: tid,
+          reply_markup: cancelTurnKeyboard(tid),
+        })
         .catch(echoText);
     } else {
       await echoText();
@@ -623,9 +662,10 @@ async function main() {
     { command: "id", description: "Agent session id of this topic" },
   ]);
 
-  // Pickers first: they pass callbacks they don't own on to the permission
-  // buttons, which answer everything else.
+  // Each callback owner passes unknown buttons to the next one. Permission
+  // prompts are last and answer anything left over.
   registerPickerButtons(bot);
+  registerSessionCancelButtons();
   registerPermissionButtons(bot);
   startSweep(bot);
   // From here on `/telegramify` will adopt sessions into this forum.

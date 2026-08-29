@@ -128,7 +128,8 @@ default of its own, so nothing is passed and the CLI resolves it as usual. That
 Claude's tick is read from the same settings files the CLI reads; Codex's comes
 from `model_reasoning_effort` in `~/.codex/config.toml` when present. Touch a button and the launch waits for you: press
 buttons until you're happy, then **Confirm**, or just stop pressing and it goes
-with your last pick a minute later. Once it's settled that same message turns
+with your last pick a minute later. **Cancel** aborts the launch before a topic
+or agent session is created. Once it's settled that same message turns
 into the launch line — `→ «title» (cwd: …) 🧠 Codex 🤖 GPT-5.6 Sol ⚙️ low` — so a launch is
 one message in the launcher, not a picker plus a note.
 
@@ -153,7 +154,9 @@ launch's picker. The model a turn ran on is in its summary line and in `/usage`.
 `/stop`, inside a topic, interrupts the turn running there — the running tool is
 aborted, any permission prompt still open is denied, and messages you sent while
 it was working are dropped. The session itself stays up, so the next message
-carries on from where it stopped.
+carries on from where it stopped. The copy of the first prompt in a newly
+created topic has a **Cancel** button that performs the same immediate stop,
+without needing to type the command.
 
 `/resume`, inside a topic, hands back the one line that continues that same
 session in a terminal — `claude --resume <id>` or `codex resume <id>` in its cwd.

@@ -38,6 +38,8 @@ export type Picks = Record<string, PickValue>;
 
 export interface PickResult {
   picks: Picks;
+  /** True only when the user explicitly cancelled the picker. */
+  cancelled: boolean;
   /** The picker's own message, for a caller that would rather rewrite it than
    * post a second one. `null` when the picker never made it onto the screen. */
   messageId: number | null;
@@ -53,8 +55,9 @@ interface Live {
   messageId: number;
   groups: PickGroup[];
   selection: Picks;
+  allowCancel: boolean;
   timer: ReturnType<typeof setTimeout>;
-  settle: () => void;
+  settle: (cancelled?: boolean) => void;
 }
 
 const pickers = new Map<string, Live>();
@@ -63,7 +66,12 @@ const escapeHtml = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /** Every group's buttons, a tick on whatever each one is currently on. */
-function keyboard(id: string, groups: PickGroup[], selection: Picks): InlineKeyboard {
+function keyboard(
+  id: string,
+  groups: PickGroup[],
+  selection: Picks,
+  allowCancel: boolean,
+): InlineKeyboard {
   const kb = new InlineKeyboard();
   for (const g of groups) {
     const active = selection[g.key] ?? g.fallback;
@@ -73,7 +81,9 @@ function keyboard(id: string, groups: PickGroup[], selection: Picks): InlineKeyb
     });
     if (g.options.length % g.perRow !== 0) kb.row();
   }
-  return kb.text("✅ Confirm", `p:${id}:ok`);
+  kb.text("✅ Confirm", `p:${id}:ok`);
+  if (allowCancel) kb.text("✖️ Cancel", `p:${id}:cancel`);
+  return kb;
 }
 
 const settledText = (groups: PickGroup[], selection: Picks): string =>
@@ -98,6 +108,8 @@ export function askPick(
     groups: PickGroup[];
     /** Wait before the first press. Defaults to the full pick window. */
     firstWaitMs?: number;
+    /** Offer an explicit way to abort the caller's flow. */
+    allowCancel?: boolean;
     /**
      * The caller will rewrite the picker's message itself, so settling only
      * takes the buttons off. Without this the two edits would race, and the
@@ -116,16 +128,27 @@ export function askPick(
       .sendMessage(cfg.chatId, text, {
         message_thread_id: opts.threadId,
         parse_mode: "HTML",
-        reply_markup: keyboard(id, groups, initial),
+        reply_markup: keyboard(id, groups, initial, opts.allowCancel ?? false),
       })
       .then(
         (sent) => {
-          const settle = () => {
+          const settle = (cancelled = false) => {
             const p = pickers.get(id);
             pickers.delete(id);
             if (p) clearTimeout(p.timer);
             const picks = p?.selection ?? initial;
-            resolve({ picks: { ...picks }, messageId: sent.message_id });
+            resolve({ picks: { ...picks }, cancelled, messageId: sent.message_id });
+            if (cancelled) {
+              void bot.api
+                .editMessageText(
+                  cfg.chatId,
+                  sent.message_id,
+                  `✖️ <b>Cancelled</b> · ${escapeHtml(opts.title)}`,
+                  { parse_mode: "HTML" },
+                )
+                .catch(() => {});
+              return;
+            }
             if (opts.rewritten) {
               void bot.api.editMessageReplyMarkup(cfg.chatId, sent.message_id).catch(() => {});
               return;
@@ -140,13 +163,14 @@ export function askPick(
             messageId: sent.message_id,
             groups,
             selection: { ...initial },
+            allowCancel: opts.allowCancel ?? false,
             timer: setTimeout(settle, opts.firstWaitMs ?? PICK_WAIT_MS),
             settle,
           });
         },
         (err) => {
           console.warn("[picker] could not show the picker:", String(err));
-          resolve({ picks: initial, messageId: null });
+          resolve({ picks: initial, cancelled: false, messageId: null });
         },
       );
   });
@@ -179,6 +203,11 @@ export function registerPickerButtons(bot: Bot): void {
       return void ctx.answerCallbackQuery({ text: label }).catch(() => {});
     }
 
+    if (key === "cancel" && index === undefined && p.allowCancel) {
+      p.settle(true);
+      return void ctx.answerCallbackQuery({ text: "Cancelled" }).catch(() => {});
+    }
+
     const group = p.groups.find((g) => g.key === key);
     const option = group?.options[Number(index)];
     if (!group || !option) return void ctx.answerCallbackQuery().catch(() => {});
@@ -190,7 +219,7 @@ export function registerPickerButtons(bot: Bot): void {
     await ctx.answerCallbackQuery().catch(() => {});
     await ctx.api
       .editMessageReplyMarkup(cfg.chatId, p.messageId, {
-        reply_markup: keyboard(id, p.groups, p.selection),
+        reply_markup: keyboard(id, p.groups, p.selection, p.allowCancel),
       })
       .catch(() => {});
   });
