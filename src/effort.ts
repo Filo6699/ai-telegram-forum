@@ -24,7 +24,6 @@ const CODEX_LEVELS: EffortLevel[] = [
   "high",
   "xhigh",
   "max",
-  "ultra",
 ];
 const levelsFor = (provider: Provider): EffortLevel[] =>
   provider === "codex" ? CODEX_LEVELS : CLAUDE_LEVELS;
