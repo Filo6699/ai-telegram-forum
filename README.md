@@ -166,9 +166,6 @@ A Claude session you started in the terminal already lives on disk, so adopting 
 just a matter of binding a topic to its id — nothing is copied or replayed into
 the session.
 
-Codex sessions are natively resumable with `/resume`, but there is no
-`/codexify` adoption command yet; `/telegramify` remains Claude-specific.
-
 ```bash
 npm run install-command      # writes ~/.claude/commands/telegramify.md, once
 ```
@@ -203,6 +200,29 @@ npm run telegramify -- --dry-run             # show what it would adopt
 > Don't keep talking to the same session in both places — the terminal and the
 > bot would resume from the same transcript and overwrite each other's tail.
 > Adopting a session twice is safe though: you get the existing topic back.
+
+## Moving a Codex terminal session to Telegram (`codexify`)
+
+Codex exposes `CODEX_THREAD_ID` inside a running session, so ask it to run the
+broker's command (use the broker's absolute directory when the session is in a
+different project):
+
+```bash
+cd /path/to/claude-tg-forum && npm run codexify
+```
+
+From a regular shell, select a saved thread explicitly or adopt the newest CLI
+thread for a cwd:
+
+```bash
+npm run codexify -- --session <uuid>
+npm run codexify -- --cwd /srv/app
+npm run codexify -- --dry-run
+```
+
+Like `/telegramify`, this binds the existing native transcript rather than
+copying it, carries the last completed final answer into the topic when one is
+available, refuses duplicate adoption, and requires a live broker heartbeat.
 
 ## Working directories
 
@@ -263,6 +283,7 @@ message received during a Codex turn becomes the next turn automatically.
 | `src/index.ts`  | bot entry, auth, routing by `message_thread_id` |
 | `src/session.ts` | one live Agent SDK session per topic |
 | `src/telegramify.ts` | adopt an existing terminal session into a topic |
+| `src/codexify.ts` | adopt an existing Codex terminal session into a topic |
 | `src/heartbeat.ts` | is the broker running? (written by the bot, read by the CLI) |
 | `src/install-command.ts` | install the `/telegramify` slash command |
 | `src/permission.ts` | tool approval prompts (inline buttons) |
@@ -272,6 +293,7 @@ message received during a Codex turn becomes the next turn automatically.
 | `src/provider.ts` | Claude/Codex selection and `/provider` |
 | `src/claude.ts` | SDK options: model, effort, permissions, usage accounting |
 | `src/codex.ts` | Codex SDK options, thread/input/event adaptation |
+| `src/codex-app-server.ts` | one-shot requests to Codex's local app-server |
 | `src/codex-limits.ts` | Codex ChatGPT rate limits behind `/usage` |
 | `src/codex-tg-server.ts` | Codex's topic-bound stdio MCP `send` server |
 | `src/tg-tools.ts` | shared `send` implementation + Claude's in-process MCP server |

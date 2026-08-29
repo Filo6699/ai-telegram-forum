@@ -10,6 +10,7 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 | `src/index.ts`  | bot entry, auth, routing by `message_thread_id` |
 | `src/session.ts` | one live SDK session per topic; turn lifecycle |
 | `src/telegramify.ts` | CLI: adopt an existing on-disk session into a new topic |
+| `src/codexify.ts` | CLI: adopt an existing Codex thread into a new topic |
 | `src/install-command.ts` | writes the `/telegramify` slash command for Claude Code |
 | `src/heartbeat.ts` | broker liveness file: written by the bot, read by the CLI |
 | `src/permission.ts` | tool approval prompts + their inline buttons |
@@ -18,6 +19,7 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 | `src/model.ts` | model buttons, `/model`, model-name parsing |
 | `src/claude.ts` | SDK options: model, effort, permission policy, usage accounting |
 | `src/codex.ts` | Codex SDK options, thread/input/event adaptation |
+| `src/codex-app-server.ts` | one-shot Codex app-server requests |
 | `src/codex-limits.ts` | Codex plan limits through the local app-server |
 | `src/codex-tg-server.ts` | topic-bound stdio MCP server for Codex |
 | `src/provider.ts` | provider selection and labels |
@@ -42,6 +44,7 @@ npm run typecheck  # tsc --noEmit — must be clean before you commit
 
 npm run install-command          # install /telegramify into ~/.claude/commands
 npm run telegramify -- --dry-run # adopt the current terminal session into a topic
+npm run codexify -- --dry-run    # same for a Codex thread
 ```
 
 ## Rules
@@ -73,7 +76,7 @@ npm run telegramify -- --dry-run # adopt the current terminal session into a top
   exactly that reason. And a `callback_query:data` handler that doesn't own the
   callback must pass it on with `next()`, or the handler registered after it
   never sees anything.
-- **Adoption binds, it doesn't copy.** `/telegramify` only writes a topic row
+- **Adoption binds, it doesn't copy.** `/telegramify` and `codexify` only write a topic row
   pointing at a session id that already exists on disk — never replay or import
   a transcript *into the session*. The agent's last reply is re-posted into the
   fresh topic so the handover reads, but that copy goes one way, to Telegram:
