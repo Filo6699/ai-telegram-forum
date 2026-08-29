@@ -33,6 +33,7 @@ import { askPick, LAUNCH_WAIT_MS, registerPickerButtons } from "./picker.ts";
 import { fmtTokens } from "./fmt.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { fetchPlanLimits, planLimitsText } from "./limits.ts";
+import { MediaGroupCollector } from "./media-group.ts";
 import { registerPermissionButtons } from "./permission.ts";
 import { liveSession, sessionFor, type AgentInput } from "./session.ts";
 import {
@@ -401,7 +402,7 @@ let botUsername = "";
 const cancelTurnKeyboard = (threadId: number): InlineKeyboard =>
   new InlineKeyboard().text("✖️ Cancel", `s:${threadId}`);
 
-/** The first copied prompt can stop its own running turn without typing /stop. */
+/** A topic's permanent button stops whichever turn is currently running. */
 function registerSessionCancelButtons(): void {
   bot.on("callback_query:data", async (ctx, next) => {
     const match = /^s:(\d+)$/.exec(ctx.callbackQuery.data);
@@ -424,7 +425,6 @@ function registerSessionCancelButtons(): void {
       return void ctx.answerCallbackQuery({ text: "Nothing is running." }).catch(() => {});
     }
     await ctx.answerCallbackQuery({ text: "Stopped" }).catch(() => {});
-    await ctx.editMessageReplyMarkup().catch(() => {});
   });
 }
 
@@ -440,7 +440,12 @@ const contentOf = (text: string, images: ImagePart[]): AgentInput => ({ text, im
  * Each launcher message gets its own picker, so two launches never queue behind
  * each other.
  */
-async function launch(ctx: any, text: string, images: ImagePart[]): Promise<void> {
+async function launch(
+  ctx: any,
+  text: string,
+  images: ImagePart[],
+  sources: any[] = [ctx],
+): Promise<void> {
   const { cwd, prompt } = resolveCwd(text);
   const title = placeholderTitle(prompt || "image");
   const provider = nextProvider ?? cfg.provider;
@@ -495,19 +500,24 @@ async function launch(ctx: any, text: string, images: ImagePart[]): Promise<void
       reply_markup: cancelTurnKeyboard(tid),
     });
   try {
-    // An attachment is copied verbatim — a poll or a live location can refuse
-    // to be copied, and then the prompt text stands in for it. Plain text is
-    // re-sent without its cwd prefix.
-    if (ctx.message.text === undefined) {
-      await ctx.api
-        .copyMessage(cfg.chatId, cfg.chatId, ctx.message.message_id, {
-          message_thread_id: tid,
-          reply_markup: cancelTurnKeyboard(tid),
-        })
-        .catch(echoText);
-    } else {
-      await echoText();
-    }
+    // Attachments are copied verbatim. For an album, the first successful copy
+    // owns the permanent stop button and every source item stays visible.
+    if (sources.some((source) => source.message.text === undefined)) {
+      let copied = false;
+      for (const source of sources) {
+        if (source.message.text !== undefined) continue;
+        try {
+          await ctx.api.copyMessage(cfg.chatId, cfg.chatId, source.message.message_id, {
+            message_thread_id: tid,
+            ...(!copied ? { reply_markup: cancelTurnKeyboard(tid) } : {}),
+          });
+          copied = true;
+        } catch (err) {
+          console.warn(`[launch] copying message ${source.message.message_id} failed:`, String(err));
+        }
+      }
+      if (!copied) await echoText();
+    } else await echoText();
   } catch (err) {
     console.warn(`[launch] echoing the prompt into ${tid} failed:`, String(err));
   }
@@ -518,12 +528,17 @@ async function launch(ctx: any, text: string, images: ImagePart[]): Promise<void
 }
 
 /** Route one inbound user message (with any images already downloaded). */
-async function route(ctx: any, text: string, images: ImagePart[]): Promise<void> {
+async function route(
+  ctx: any,
+  text: string,
+  images: ImagePart[],
+  sources: any[] = [ctx],
+): Promise<void> {
   const thread: number | undefined = ctx.message.message_thread_id;
 
   // ---- A) Launcher: spin up a new topic + session -----------------------
   if (isLauncher(thread)) {
-    void launch(ctx, text, images).catch(async (err) => {
+    void launch(ctx, text, images, sources).catch(async (err) => {
       console.error("[launch] failed:", err);
       await ctx
         .reply(`❌ couldn't start that session: ${String(err)}`, {
@@ -572,38 +587,26 @@ bot.on("message:text", async (ctx) => {
 const withNote = (caption: string, note: string): string =>
   caption ? `${caption}\n\n${note}` : note;
 
-/**
- * Everything that isn't plain text.
- *
- * Each attachment kind takes one of three routes: pixels the model can see go
- * inside the message, files are saved and handed over as a path to open, and
- * the metadata-only kinds — a location, a poll, a contact — arrive as the
- * words that describe them. An album comes in as one message per item; each is
- * its own turn input, which the session hands to the agent together at its
- * next step.
- */
-bot.on("message", async (ctx) => {
-  if (!mine(ctx)) return;
+/** Turn one non-text Telegram update into provider-neutral agent input. */
+async function contentFrom(ctx: any): Promise<AgentInput | null> {
   const thread = ctx.message.message_thread_id;
   const caption = ctx.message.caption?.trim() ?? "";
-
   const inbound = classify(ctx.message);
   if (!inbound) {
     // Telegram's own chatter carries nothing to pass on. Anything else that
     // got this far is a real message we can't read, and going quiet about it
     // is exactly how a message full of intent reaches nobody.
-    if (isService(ctx.message)) return;
+    if (isService(ctx.message)) return null;
     await ctx
       .reply("⚠️ I can't read that kind of message — try sending it as a file.", {
         message_thread_id: thread,
       })
       .catch(() => {});
-    return;
+    return null;
   }
 
   if (inbound.as === "text") {
-    await route(ctx, withNote(caption, `[${inbound.label}]`), []);
-    return;
+    return contentOf(withNote(caption, `[${inbound.label}]`), []);
   }
 
   if (inbound.as === "image") {
@@ -615,10 +618,9 @@ bot.on("message", async (ctx) => {
       await ctx
         .reply(`⚠️ couldn't fetch that image: ${String(err)}`, { message_thread_id: thread })
         .catch(() => {});
-      return;
+      return null;
     }
-    await route(ctx, caption, [image]);
-    return;
+    return contentOf(caption, [image]);
   }
 
   // Anything with bytes behind it that the model can't look at: saved next to
@@ -631,9 +633,44 @@ bot.on("message", async (ctx) => {
     await ctx
       .reply(`⚠️ couldn't fetch that ${inbound.kind}: ${String(err)}`, { message_thread_id: thread })
       .catch(() => {});
+    return null;
+  }
+  return contentOf(
+    withNote(caption, `[${inbound.label}, ${humanSize(file.size)}]\n${file.path}`),
+    [],
+  );
+}
+
+async function routeMediaGroup(sources: any[]): Promise<void> {
+  const parts = (await Promise.all(sources.map(contentFrom))).filter(
+    (part): part is AgentInput => part !== null,
+  );
+  if (!parts.length) return;
+  await route(
+    sources[0],
+    parts.map((part) => part.text).filter(Boolean).join("\n\n"),
+    parts.flatMap((part) => part.images),
+    sources,
+  );
+}
+
+// Telegram emits every album item as a separate update and has no explicit
+// final marker. Half a second after the last item is the earliest safe send.
+const mediaGroups = new MediaGroupCollector<any>(500, (sources) => {
+  void routeMediaGroup(sources).catch((err) => console.error("[media-group] failed:", err));
+});
+
+bot.on("message", async (ctx) => {
+  if (!mine(ctx)) return;
+  const groupId = ctx.message.media_group_id;
+  if (groupId) {
+    const key = `${ctx.chat.id}:${ctx.message.message_thread_id ?? 0}:${groupId}`;
+    mediaGroups.add(key, ctx);
     return;
   }
-  await route(ctx, withNote(caption, `[${inbound.label}, ${humanSize(file.size)}]\n${file.path}`), []);
+
+  const content = await contentFrom(ctx);
+  if (content) await route(ctx, content.text, content.images);
 });
 
 bot.catch((err) => {

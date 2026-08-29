@@ -86,8 +86,8 @@ that would abandon its native session history.
 
 **Pictures work too.** Send a photo (or an image sent as a file — JPEG, PNG,
 GIF, WebP) with an optional caption, in the launcher or inside a topic, and the
-agent sees the image itself alongside the caption. An album arrives as several
-messages; the agent gets them together at its next step.
+agent sees the image itself alongside the caption. Telegram sends an album as
+several updates; the bot briefly collects them and gives the agent one message.
 
 **So does everything else you can attach.** A voice message, a video, a music
 file, a GIF, a video note, an animated sticker, a `.md` spec, a CSV — anything
@@ -153,10 +153,10 @@ launch's picker. The model a turn ran on is in its summary line and in `/usage`.
 
 `/stop`, inside a topic, interrupts the turn running there — the running tool is
 aborted, any permission prompt still open is denied, and messages you sent while
-it was working are dropped. The session itself stays up, so the next message
-carries on from where it stopped. The copy of the first prompt in a newly
-created topic has a **Cancel** button that performs the same immediate stop,
-without needing to type the command.
+it was working remain queued. The session itself stays up and continues with
+them. The copy of the first prompt in a newly created topic has a permanent
+**Cancel** button that performs the same immediate stop without typing the
+command.
 
 `/resume`, inside a topic, hands back the one line that continues that same
 session in a terminal — `claude --resume <id>` or `codex resume <id>` in its cwd.

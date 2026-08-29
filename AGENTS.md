@@ -17,6 +17,7 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 | `src/effort.ts` | reasoning-effort pickers, `/effort`, level parsing |
 | `src/claude.ts` | SDK options: model, effort, permission policy, usage accounting |
 | `src/codex.ts` | Codex SDK options, thread/input/event adaptation |
+| `src/agent-session.ts` | provider-neutral session lifecycle |
 | `src/codex-app-server.ts` | one-shot Codex app-server requests |
 | `src/codex-limits.ts` | Codex plan limits through the local app-server |
 | `src/codex-tg-server.ts` | topic-bound stdio MCP server for Codex |
@@ -27,6 +28,7 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 | `src/render.ts` | markdown → topic messages, with format fallback |
 | `src/fmt.ts`    | duration & token formatting |
 | `src/media.ts`  | inbound photos → base64 image blocks for the user message |
+| `src/media-group.ts` | collects Telegram albums into one input |
 | `src/html.ts`   | markdown → Telegram HTML (fallback when MarkdownV2 fails) |
 | `src/cwd.ts`    | `@alias` / `/path` prefix parsing, titles |
 | `src/db.ts`     | SQLite state (`node:sqlite`) |
@@ -86,7 +88,8 @@ npm run codexify -- --dry-run    # same for a Codex thread
   cwd's folder holds every session for that project, terminal ones included:
   deleting it takes out history the bot never created. Sessions end
   (`endSession`) — they are never removed from disk. Same for `data/inbox`
-  attachments the agent may still be holding a path to.
+  attachments the agent may still be holding a path to. Provider transcripts
+  are append-only.
 - Keep it dependency-light and single-user. Don't add a runtime dependency or
   multi-user auth without discussing the design first.
 - Don't touch `.env` or `data/` — both are git-ignored and hold real state.
