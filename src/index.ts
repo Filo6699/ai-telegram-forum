@@ -1,5 +1,6 @@
 import { Bot } from "grammy";
 import { cfg } from "./config.ts";
+import { fetchCodexPlanLimits } from "./codex-limits.ts";
 import {
   classify,
   fetchDocument,
@@ -368,15 +369,8 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
   const t = thread !== undefined ? getTopic(thread) : undefined;
   const local = t ? topicUsageText(t) : totalsText();
 
-  if (t?.provider === "codex") {
-    await ctx.reply(`${local}\n\n_Codex reports per-turn tokens but not plan limits or cost here._`, {
-      message_thread_id: thread,
-      parse_mode: "Markdown",
-    });
-    return true;
-  }
-
-  // Asking claude.ai for the plan limits can take a few seconds (and may have
+  const provider = t?.provider ?? nextProvider ?? cfg.provider;
+  // Asking the provider for plan limits can take a few seconds (and may have
   // to start a child), so post the local tally first and fill the rest in.
   const sent = await ctx.reply(`${local}\n\n⏳ _checking plan limits…_`, {
     message_thread_id: thread,
@@ -385,7 +379,9 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
 
   let plan: string;
   try {
-    plan = planLimitsText(await fetchPlanLimits());
+    const limits =
+      provider === "codex" ? await fetchCodexPlanLimits() : await fetchPlanLimits();
+    plan = planLimitsText(limits, providerLabel(provider));
   } catch (err) {
     console.warn("[usage] plan limits failed:", String(err));
     plan = "_plan limits unavailable_";

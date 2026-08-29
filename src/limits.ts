@@ -81,7 +81,7 @@ async function read(q: Asker): Promise<PlanLimits | null> {
  * Telegram only keeps columns aligned inside a code block, so that's where the
  * bars live — the label column is padded to the widest label.
  */
-export function planLimitsText(limits: PlanLimits | null): string {
+export function planLimitsText(limits: PlanLimits | null, provider = "Claude"): string {
   if (!limits) return "_plan limits unavailable (API key or 3rd-party provider)_";
   if (!limits.windows.length) return "_no plan limit windows reported_";
   const pad = Math.max(...limits.windows.map((w) => w.label.length));
@@ -91,7 +91,7 @@ export function planLimitsText(limits: PlanLimits | null): string {
     return `${w.label.padEnd(pad)} ${bar(w.utilization)} ${used}${reset}`;
   });
   const plan = limits.subscription ? ` (${limits.subscription})` : "";
-  return [`⏳ *Claude plan${plan}*`, "```", ...rows, "```"].join("\n");
+  return [`⏳ *${provider} plan${plan}*`, "```", ...rows, "```"].join("\n");
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {

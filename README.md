@@ -114,8 +114,9 @@ across every topic). Claude turns also report SDK cost and are followed by your 
 windows — the 5-hour and weekly meters the CLI's `/usage` shows, drawn as bars
 with the time until each resets. Those come from claude.ai, so they cover all your Claude
 Code activity, not just this bot; on an API-key or Bedrock/Vertex setup there
-are no plan limits and that part is left out. Codex's TypeScript SDK reports
-tokens but not cost or plan-limit windows, so the bot does not invent either.
+are no plan limits and that part is left out. Codex reports tokens through its
+SDK and ChatGPT rate-limit windows through its local app-server. It does not
+report authoritative per-turn cost, so the bot does not invent one.
 
 **Model and reasoning effort.** Every new session opens with one provider-specific picker in the
 launcher — the models on top, then the supported effort levels, each
@@ -271,6 +272,7 @@ message received during a Codex turn becomes the next turn automatically.
 | `src/provider.ts` | Claude/Codex selection and `/provider` |
 | `src/claude.ts` | SDK options: model, effort, permissions, usage accounting |
 | `src/codex.ts` | Codex SDK options, thread/input/event adaptation |
+| `src/codex-limits.ts` | Codex ChatGPT rate limits behind `/usage` |
 | `src/codex-tg-server.ts` | Codex's topic-bound stdio MCP `send` server |
 | `src/tg-tools.ts` | shared `send` implementation + Claude's in-process MCP server |
 | `src/status.ts` | live status line, then the turn summary |
@@ -286,7 +288,7 @@ message received during a Codex turn becomes the next turn automatically.
 ## Limitations
 
 - Codex's TypeScript SDK does not expose mid-turn steering, interactive approval
-  callbacks, generated titles, plan-limit windows, or cost. The broker uses the
+  callbacks, generated titles, or cost. The broker uses the
   closest safe behavior described above. `/stop`, resume, model/effort changes,
   images, tool status, token usage, and the direct `send`/file tool do work.
 - The agent decides when to write, through its `send` tool. A long turn isn't

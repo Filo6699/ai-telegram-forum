@@ -16,6 +16,7 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 | `src/effort.ts` | reasoning-effort pickers, `/effort`, level parsing |
 | `src/claude.ts` | SDK options: model, effort, permission policy, usage accounting |
 | `src/codex.ts` | Codex SDK options, thread/input/event adaptation |
+| `src/codex-limits.ts` | Codex plan limits through the local app-server |
 | `src/codex-tg-server.ts` | topic-bound stdio MCP server for Codex |
 | `src/provider.ts` | provider selection and labels |
 | `src/tg-tools.ts` | shared send implementation + Claude's in-process MCP server |
