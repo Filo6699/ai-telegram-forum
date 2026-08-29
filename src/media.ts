@@ -4,8 +4,8 @@ import type { Api } from "grammy";
 import type { Message } from "grammy/types";
 import { cfg } from "./config.ts";
 
-/** An image handed to the agent as a content block, straight from Telegram. */
-export type ImagePart = { data: string; mediaType: string };
+/** An image handed to Claude as base64 and to Codex as a local file. */
+export type ImagePart = { data: string; mediaType: string; path: string };
 
 /** The types the model accepts — anything else isn't worth downloading. */
 const BY_EXT: Record<string, string> = {
@@ -31,20 +31,28 @@ function mediaTypeOf(mime: string | undefined, path: string): string {
 }
 
 /**
- * Download a Telegram file and return it base64-encoded.
+ * Download a Telegram image and retain both representations the SDKs need.
  *
- * The image travels to the agent inside the user message rather than as a path
- * on disk: the session may be running anywhere, and nothing has to survive the
- * turn. The Bot API caps downloads at 20 MB, which the caller can't check
- * beforehand for photos — `getFile` fails loudly enough.
+ * Claude accepts base64 content blocks; Codex accepts local image paths. The
+ * file therefore lives under the same persistent inbox as other attachments.
+ * The Bot API caps downloads at 20 MB, which the caller can't check beforehand
+ * for photos — `getFile` fails loudly enough.
  */
 export async function fetchImage(
   api: Api,
   fileId: string,
   mime?: string,
+  uniqueId?: string,
 ): Promise<ImagePart> {
   const { buf, filePath } = await download(api, fileId);
-  return { data: buf.toString("base64"), mediaType: mediaTypeOf(mime, filePath) };
+  const mediaType = mediaTypeOf(mime, filePath);
+  const key = (uniqueId ?? fileId).replace(/[^\w-]/g, "") || "image";
+  const dir = join(resolve(cfg.inboxPath), key);
+  mkdirSync(dir, { recursive: true });
+  const ext = Object.entries(BY_EXT).find(([, type]) => type === mediaType)?.[0] ?? "jpg";
+  const path = join(dir, `image.${ext === "jpeg" ? "jpg" : ext}`);
+  writeFileSync(path, buf);
+  return { data: buf.toString("base64"), mediaType, path };
 }
 
 /** Fetch a Telegram file's bytes, plus the remote path Telegram named it by. */
@@ -108,7 +116,7 @@ export async function fetchDocument(
  * so words are what the agent gets.
  */
 export type Inbound =
-  | { as: "image"; fileId: string; mime?: string }
+  | { as: "image"; fileId: string; uniqueId: string; mime?: string }
   | { as: "file"; fileId: string; uniqueId: string; kind: string; label: string; name?: string }
   | { as: "text"; label: string };
 
@@ -131,12 +139,19 @@ function mmss(sec: number): string {
 export function classify(msg: Message): Inbound | undefined {
   // The last photo size is the largest one Telegram kept.
   const photo = msg.photo?.at(-1);
-  if (photo) return { as: "image", fileId: photo.file_id };
+  if (photo) {
+    return { as: "image", fileId: photo.file_id, uniqueId: photo.file_unique_id };
+  }
 
   const doc = msg.document;
   if (doc) {
     if (isSupportedImage(doc.mime_type)) {
-      return { as: "image", fileId: doc.file_id, mime: doc.mime_type };
+      return {
+        as: "image",
+        fileId: doc.file_id,
+        uniqueId: doc.file_unique_id,
+        mime: doc.mime_type,
+      };
     }
     return {
       as: "file",
@@ -152,7 +167,14 @@ export function classify(msg: Message): Inbound | undefined {
   // video (.webm) ones are formats it can't, so they go over as files.
   const st = msg.sticker;
   if (st) {
-    if (!st.is_animated && !st.is_video) return { as: "image", fileId: st.file_id, mime: "image/webp" };
+    if (!st.is_animated && !st.is_video) {
+      return {
+        as: "image",
+        fileId: st.file_id,
+        uniqueId: st.file_unique_id,
+        mime: "image/webp",
+      };
+    }
     return {
       as: "file",
       fileId: st.file_id,

@@ -4,12 +4,15 @@ import { dirname } from "node:path";
 import { cfg } from "./config.ts";
 import type { Effort } from "./effort.ts";
 import type { Model } from "./model.ts";
+import type { Provider } from "./provider.ts";
 
 export type TopicStatus = "active" | "closed";
 
 export interface Topic {
   thread_id: number;
   session_id: string | null;
+  /** Existing rows predate providers and are migrated as Claude topics. */
+  provider: Provider;
   cwd: string;
   title: string;
   /** null = no choice of ours; the session runs on Claude's own default. */
@@ -38,6 +41,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS topics (
     thread_id     INTEGER PRIMARY KEY,
     session_id    TEXT,
+    provider      TEXT NOT NULL DEFAULT 'claude',
     cwd           TEXT NOT NULL,
     title         TEXT NOT NULL,
     effort        TEXT,
@@ -60,6 +64,7 @@ for (const col of [
   "cost_usd REAL NOT NULL DEFAULT 0",
   "effort TEXT",
   "model TEXT",
+  "provider TEXT NOT NULL DEFAULT 'claude'",
 ]) {
   try {
     db.exec(`ALTER TABLE topics ADD COLUMN ${col}`);
@@ -70,10 +75,10 @@ for (const col of [
 
 const stmts = {
   get: db.prepare("SELECT * FROM topics WHERE thread_id = ?"),
-  bySession: db.prepare("SELECT * FROM topics WHERE session_id = ?"),
+  bySession: db.prepare("SELECT * FROM topics WHERE provider = ? AND session_id = ?"),
   insert: db.prepare(
-    `INSERT INTO topics (thread_id, session_id, cwd, title, effort, model, status, last_activity, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+    `INSERT INTO topics (thread_id, session_id, provider, cwd, title, effort, model, status, last_activity, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
   ),
   setEffort: db.prepare("UPDATE topics SET effort = ? WHERE thread_id = ?"),
   setModel: db.prepare("UPDATE topics SET model = ? WHERE thread_id = ?"),
@@ -109,15 +114,16 @@ export function getTopic(threadId: number): Topic | undefined {
   return stmts.get.get(threadId) as unknown as Topic | undefined;
 }
 
-/** The topic already bound to a Claude session id, if any. */
-export function findBySession(sessionId: string): Topic | undefined {
-  return stmts.bySession.get(sessionId) as unknown as Topic | undefined;
+/** The topic already bound to this provider's session id, if any. */
+export function findBySession(sessionId: string, provider: Provider = "claude"): Topic | undefined {
+  return stmts.bySession.get(provider, sessionId) as unknown as Topic | undefined;
 }
 
 export function createTopic(t: {
   threadId: number;
   cwd: string;
   title: string;
+  provider?: Provider;
   effort?: Effort;
   model?: Model;
   /** Set when adopting a session that already exists on disk (`/telegramify`). */
@@ -127,6 +133,7 @@ export function createTopic(t: {
   stmts.insert.run(
     t.threadId,
     t.sessionId ?? null,
+    t.provider ?? "claude",
     t.cwd,
     t.title,
     t.effort ?? null,

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Telegram forum ↔ Claude Code broker. One forum topic = one Agent SDK session.
+Telegram forum ↔ Claude Code / Codex broker. One forum topic = one native agent session.
 Read `README.md` for the user-facing picture; this file is the working contract.
 
 ## Layout
@@ -17,7 +17,10 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 | `src/effort.ts` | reasoning-effort buttons, `/effort`, level parsing |
 | `src/model.ts` | model buttons, `/model`, model-name parsing |
 | `src/claude.ts` | SDK options: model, effort, permission policy, usage accounting |
-| `src/tg-tools.ts` | in-process MCP server — the agent's own `send` tool |
+| `src/codex.ts` | Codex SDK options, thread/input/event adaptation |
+| `src/codex-tg-server.ts` | topic-bound stdio MCP server for Codex |
+| `src/provider.ts` | provider selection and labels |
+| `src/tg-tools.ts` | shared send implementation + Claude's in-process MCP server |
 | `src/status.ts` | the live status line / turn summary message |
 | `src/limits.ts` | plan rate limits (5-hour / weekly) behind `/usage` |
 | `src/render.ts` | markdown → topic messages, with format fallback |
@@ -51,11 +54,14 @@ npm run telegramify -- --dry-run # adopt the current terminal session into a top
   ended without the agent ever calling `send` — losing a reply the session
   recorded is the bug this design exists to prevent. Errors always get posted,
   regardless of that fallback.
-- **A topic's session outlives its turns.** `TopicSession` feeds the SDK from an
+- **A topic's session outlives its turns.** Claude's `TopicSession` feeds the SDK from an
   iterator that stays open, so an incoming message is delivered at the agent's
   next step — never interrupt a running turn to hand it over, and never add a
   queue in front of it. Anything that shuts a topic down (sweep, idle timeout)
   must go through `endSession`, or the child process is orphaned.
+  Codex's SDK has no steering API: input received mid-turn is consumed as the
+  next turn, without interrupting the running one. Its subprocess is per-turn,
+  but the same persisted thread id and in-memory topic object continue.
 - **Callback queries are inbound too.** They're the one path that doesn't go
   through the message handler's gate, so every handler must check
   `ALLOWED_USER_ID` itself. A permission prompt must always settle — button,
@@ -83,8 +89,8 @@ npm run telegramify -- --dry-run # adopt the current terminal session into a top
   words for the kinds with no file behind them. What it can't read gets a reply
   saying so; only Telegram's own service messages are dropped in silence. A
   message that vanishes is a session that never starts.
-- **Never delete a Claude session.** Cleanup deletes Telegram topics and their
-  DB rows — nothing under `~/.claude/projects/`. A transcript is the user's
+- **Never delete an agent session.** Cleanup deletes Telegram topics and their
+  DB rows — nothing under `~/.claude/projects/` or `~/.codex/sessions/`. A transcript is the user's
   work, it long outlives the topic that happened to be pointed at it, and one
   cwd's folder holds every session for that project, terminal ones included:
   deleting it takes out history the bot never created. Sessions end

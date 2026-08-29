@@ -2,15 +2,27 @@ import {
   getSessionInfo,
   query,
   type Query,
+  type EffortLevel as ClaudeEffortLevel,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { Thread as CodexThread } from "@openai/codex-sdk";
 import type { Bot } from "grammy";
 import { queryOptions, readUsage, type Usage } from "./claude.ts";
+import {
+  codexInput,
+  codexToolName,
+  createCodexThread,
+  isCodexSend,
+  readCodexUsage,
+  type CodexInput,
+} from "./codex.ts";
 import { cfg } from "./config.ts";
 import { isPendingTitle } from "./cwd.ts";
 import { addUsage, getTopic, setEffort, setModel, setSession, setTitle, touch } from "./db.ts";
 import { defaultEffort, effortLabel, type Effort } from "./effort.ts";
 import { defaultModel, modelLabel, type Model } from "./model.ts";
+import type { ImagePart } from "./media.ts";
+import type { Provider } from "./provider.ts";
 import { fmtTokens, humanMs } from "./fmt.ts";
 import { clearPermissions, denyPending } from "./permission.ts";
 import { TopicRenderer } from "./render.ts";
@@ -19,18 +31,42 @@ import { createTgChannel, TG_SEND_TOOL, type TgChannel } from "./tg-tools.ts";
 
 const zeroUsage = (): Usage => ({ inTokens: 0, outTokens: 0, costUsd: 0 });
 
+export interface AgentInput {
+  text: string;
+  images: ImagePart[];
+}
+
+function claudeMessage(input: AgentInput): SDKUserMessage {
+  const content: SDKUserMessage["message"]["content"] = input.images.length
+    ? [
+        ...input.images.map((image) => ({
+          type: "image" as const,
+          source: {
+            type: "base64" as const,
+            media_type: image.mediaType as "image/jpeg",
+            data: image.data,
+          },
+        })),
+        ...(input.text ? [{ type: "text" as const, text: input.text }] : []),
+      ]
+    : input.text;
+  return {
+    type: "user",
+    message: { role: "user", content },
+    parent_tool_use_id: null,
+  };
+}
+
 /**
  * One live Agent SDK session per topic.
  *
- * The session is fed by an async iterator that stays open between turns, so a
- * message that arrives while the agent is working is handed to it at its next
- * step instead of waiting for the turn to end. Nothing is interrupted: the
- * running tool finishes, then the agent sees the new message alongside its
- * result.
+ * Claude is fed by an async iterator that stays open between turns, so a new
+ * message reaches it at its next step. Codex's SDK has no steering API; those
+ * messages are retained here and become its next native turn.
  *
  * The child process is kept only while the topic is warm — after
  * `SESSION_IDLE_MINUTES` of silence it is shut down, and the next message
- * starts a fresh one resuming the same Claude session id.
+ * starts a fresh one resuming the same provider session id.
  */
 export class TopicSession {
   private out: TopicRenderer;
@@ -42,6 +78,10 @@ export class TopicSession {
   private ended = false;
 
   private q: Query | null = null;
+  private codexThread: CodexThread | null = null;
+  private codexPending: CodexInput[] = [];
+  private codexAbort: AbortController | null = null;
+  private codexSent = 0;
   private running = false;
 
   // An effort or model change asked for mid-turn: applied once the turn is
@@ -66,6 +106,7 @@ export class TopicSession {
     readonly threadId: number,
     private cwd: string,
     private sessionId: string | null,
+    readonly provider: Provider = "claude",
     private effortLevel: Effort = null,
     private modelId: Model = null,
   ) {
@@ -75,7 +116,7 @@ export class TopicSession {
 
   /** The running SDK query, if the child is up — for control-channel questions. */
   get live(): Query | null {
-    return this.q;
+    return this.provider === "claude" ? this.q : null;
   }
 
   get effort(): Effort {
@@ -95,6 +136,11 @@ export class TopicSession {
   setEffort(level: Effort): void {
     this.effortLevel = level;
     setEffort(this.threadId, level);
+    if (this.provider === "codex") {
+      if (this.turnActive) this.effortDirty = true;
+      else this.resetCodexThread();
+      return;
+    }
     if (!this.q) return; // child is down: `run()` will pass it at startup
     if (this.turnActive) {
       this.effortDirty = true;
@@ -105,9 +151,15 @@ export class TopicSession {
 
   private async pushEffort(): Promise<void> {
     this.effortDirty = false;
+    if (this.provider === "codex") {
+      this.resetCodexThread();
+      return;
+    }
     // null clears our layer, dropping back to whatever Claude defaults to.
     try {
-      await this.q?.applyFlagSettings({ effortLevel: this.effortLevel });
+      await this.q?.applyFlagSettings({
+        effortLevel: this.effortLevel as ClaudeEffortLevel | null,
+      });
     } catch (err) {
       console.warn(
         `[effort] applying ${effortLabel(this.effortLevel)} to topic ${this.threadId} failed:`,
@@ -124,6 +176,11 @@ export class TopicSession {
   setModel(model: Model): void {
     this.modelId = model;
     setModel(this.threadId, model);
+    if (this.provider === "codex") {
+      if (this.turnActive) this.modelDirty = true;
+      else this.resetCodexThread();
+      return;
+    }
     if (!this.q) return; // child is down: `run()` will pass it at startup
     if (this.turnActive) {
       this.modelDirty = true;
@@ -137,10 +194,11 @@ export class TopicSession {
     // Nothing picked means the configured MODEL, which is what the child was
     // started on — say so explicitly rather than leaving the last pick in place.
     try {
-      await this.q?.setModel(this.modelId ?? defaultModel());
+      await this.q?.setModel(this.modelId ?? defaultModel("claude"));
     } catch (err) {
       console.warn(
-        `[model] applying ${modelLabel(this.modelId)} to topic ${this.threadId} failed:`,
+        `[model] applying ${modelLabel(this.modelId, undefined, this.provider)} ` +
+          `to topic ${this.threadId} failed:`,
         String(err),
       );
     }
@@ -150,16 +208,13 @@ export class TopicSession {
    * Hand a user message to the agent — now if it's idle, at its next step if
    * not. `content` is plain text, or the block list a message with images needs.
    */
-  async send(content: SDKUserMessage["message"]["content"]): Promise<void> {
+  async send(content: AgentInput): Promise<void> {
     touch(this.threadId);
     this.armIdleTimer();
-    this.push({
-      type: "user",
-      message: { role: "user", content },
-      parent_tool_use_id: null,
-    });
+    if (this.provider === "codex") this.codexPending.push(content);
+    else this.push(claudeMessage(content));
     if (!this.running) void this.run();
-    await this.beginTurn();
+    if (this.provider === "claude") await this.beginTurn();
   }
 
   /**
@@ -169,21 +224,28 @@ export class TopicSession {
    * was nothing to interrupt.
    */
   async interrupt(): Promise<boolean> {
-    if (!this.q || !this.turnActive) return false;
+    if (!this.turnActive) return false;
     this.stopped = true;
     this.pending = [];
+    this.codexPending = [];
     denyPending(this.threadId, "stopped");
-    await this.q.interrupt();
+    if (this.provider === "codex") this.codexAbort?.abort();
+    else {
+      if (!this.q) return false;
+      await this.q.interrupt();
+    }
     return true;
   }
 
-  /** Shut the child down. The Claude session id survives in the DB for resume. */
+  /** Shut the live runner down. The provider session id survives for resume. */
   close(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
     // Blanket approvals are scoped to the live session, not to the topic.
     clearPermissions(this.threadId);
     this.ended = true;
+    this.codexPending = [];
+    this.codexAbort?.abort();
     this.wake?.();
     this.wake = null;
   }
@@ -222,6 +284,7 @@ export class TopicSession {
     this.failure = null;
     this.stopped = false;
     this.stderr = "";
+    this.codexSent = 0;
     this.channel.resetSent();
     this.out.clear();
     this.status = new TurnStatus(this.out);
@@ -233,11 +296,14 @@ export class TopicSession {
     const failure = this.failure;
     const usage = this.usage;
     const stopped = this.stopped;
-    // Nothing picked means the turn ran on the level Claude resolves for this
-    // cwd — a real level, so it goes in the summary like any other. Same for
-    // the model: unset is the configured MODEL, not an absence.
-    const effort = this.turnEffort ?? defaultEffort(this.cwd);
-    const model = modelLabel(this.turnModel ?? defaultModel());
+    // Nothing picked means the turn ran on the provider's resolved default — a
+    // real level/model, so each goes in the summary rather than as an absence.
+    const effort = this.turnEffort ?? defaultEffort(this.cwd, this.provider);
+    const model = modelLabel(
+      this.turnModel ?? defaultModel(this.provider),
+      undefined,
+      this.provider,
+    );
     this.status = null;
     this.turnActive = false;
     this.failure = null;
@@ -245,7 +311,8 @@ export class TopicSession {
 
     // The agent stayed silent — fall back to whatever text the turn produced,
     // rather than leaving the topic with nothing but a summary.
-    if (this.channel.sent === 0) await this.out.send();
+    const sent = this.provider === "codex" ? this.codexSent : this.channel.sent;
+    if (sent === 0) await this.out.send();
     else this.out.clear();
     if (failure) await this.out.sendText(failure);
 
@@ -268,6 +335,19 @@ export class TopicSession {
     if (!this.sessionId) return;
     const topic = getTopic(this.threadId);
     if (!topic || !isPendingTitle(topic.title)) return;
+    if (this.provider === "codex") {
+      // Codex does not currently expose generated session titles through the
+      // TypeScript SDK. The prompt-derived name is already useful; remove the
+      // provisional marker once the first turn is safely persisted.
+      const title = topic.title.slice(2);
+      try {
+        await this.bot.api.editForumTopic(cfg.chatId, this.threadId, { name: title });
+        setTitle(this.threadId, title);
+      } catch (err) {
+        console.warn(`[session] retitling topic ${this.threadId} failed:`, String(err));
+      }
+      return;
+    }
     try {
       const info = await getSessionInfo(this.sessionId);
       const name = info?.summary?.trim();
@@ -281,7 +361,23 @@ export class TopicSession {
     }
   }
 
+  private resetCodexThread(): void {
+    if (this.provider !== "codex") return;
+    this.codexThread = createCodexThread({
+      threadId: this.threadId,
+      cwd: this.cwd,
+      sessionId: this.sessionId,
+      effort: this.effortLevel,
+      model: this.modelId,
+    });
+  }
+
   private async run(): Promise<void> {
+    if (this.provider === "codex") await this.runCodex();
+    else await this.runClaude();
+  }
+
+  private async runClaude(): Promise<void> {
     this.running = true;
     this.ended = false;
     try {
@@ -369,6 +465,93 @@ export class TopicSession {
       forget(this.threadId);
     }
   }
+
+  private async runCodex(): Promise<void> {
+    this.running = true;
+    this.ended = false;
+    if (!this.codexThread) this.resetCodexThread();
+
+    try {
+      while (!this.ended && this.codexPending.length) {
+        const batch = this.codexPending.splice(0);
+        const input: CodexInput = {
+          text: batch.map((message) => message.text).filter(Boolean).join("\n\n"),
+          images: batch.flatMap((message) => message.images),
+        };
+        this.codexAbort = new AbortController();
+        await this.beginTurn();
+        const streamed = await this.codexThread!.runStreamed(codexInput(input), {
+          signal: this.codexAbort.signal,
+        });
+        let terminal = false;
+
+        for await (const event of streamed.events) {
+          switch (event.type) {
+            case "thread.started":
+              this.sessionId = event.thread_id;
+              break;
+
+            case "item.started": {
+              const name = codexToolName(event.item);
+              if (name) this.status?.tool(name);
+              break;
+            }
+
+            case "item.completed":
+              if (event.item.type === "agent_message" && event.item.text.trim()) {
+                this.out.hold(event.item.text);
+              } else if (
+                isCodexSend(event.item) &&
+                event.item.type === "mcp_tool_call" &&
+                event.item.status === "completed"
+              ) {
+                this.codexSent++;
+              } else if (event.item.type === "error" && !this.failure) {
+                this.failure = `⚠️ ${event.item.message}`;
+              }
+              break;
+
+            case "turn.completed":
+              this.usage = readCodexUsage(event.usage);
+              terminal = true;
+              await this.endTurn(true);
+              break;
+
+            case "turn.failed":
+              if (!this.stopped) this.failure = `⚠️ ${event.error.message}`;
+              terminal = true;
+              await this.endTurn(false);
+              break;
+
+            case "error":
+              if (!this.stopped) this.failure = `⚠️ ${event.message}`;
+              break;
+          }
+        }
+
+        if (!terminal && this.turnActive) {
+          if (!this.stopped) this.failure = this.failure ?? "⚠️ Codex ended without a turn result";
+          await this.endTurn(false);
+        }
+        this.codexAbort = null;
+      }
+    } catch (err) {
+      if (!this.stopped) {
+        this.failure = `❌ ${String(err)}`;
+        console.error(`[codex:${this.threadId}] session died:`, err);
+      }
+      if (this.turnActive) await this.endTurn(false);
+    } finally {
+      this.running = false;
+      this.codexAbort = null;
+      this.ended = false;
+      clearPermissions(this.threadId);
+      // A message can land between the loop deciding the queue is empty and
+      // `running` flipping back. Start it now instead of waiting for a third.
+      if (this.codexPending.length) void this.runCodex();
+      else this.armIdleTimer();
+    }
+  }
 }
 
 /** The one line that replaces the live status when a turn ends. */
@@ -405,6 +588,7 @@ export function sessionFor(
     thread_id: number;
     cwd: string;
     session_id: string | null;
+    provider?: Provider;
     effort?: Effort;
     model?: Model;
   },
@@ -416,6 +600,7 @@ export function sessionFor(
     topic.thread_id,
     topic.cwd,
     topic.session_id,
+    topic.provider ?? "claude",
     topic.effort ?? null,
     topic.model ?? null,
   );

@@ -1,0 +1,116 @@
+import { fileURLToPath } from "node:url";
+import {
+  Codex,
+  type Input,
+  type ModelReasoningEffort,
+  type Thread,
+  type ThreadItem,
+  type Usage as CodexUsage,
+} from "@openai/codex-sdk";
+import { cfg } from "./config.ts";
+import type { Effort } from "./effort.ts";
+import type { ImagePart } from "./media.ts";
+import type { Model } from "./model.ts";
+import { TG_SYSTEM_PROMPT } from "./tg-tools.ts";
+
+export interface CodexInput {
+  text: string;
+  images: ImagePart[];
+}
+
+const projectRoot = fileURLToPath(new URL("..", import.meta.url));
+const tgServer = fileURLToPath(new URL("./codex-tg-server.ts", import.meta.url));
+
+export function codexInput(input: CodexInput): Input {
+  const parts: Exclude<Input, string> = input.images.map((image) => ({
+    type: "local_image",
+    path: image.path,
+  }));
+  if (input.text) parts.unshift({ type: "text", text: input.text });
+  return parts.length ? parts : "[image]";
+}
+
+export function createCodexThread(opts: {
+  threadId: number;
+  cwd: string;
+  sessionId: string | null;
+  effort: Effort;
+  model: Model;
+}): Thread {
+  const codex = new Codex({
+    config: {
+      developer_instructions: TG_SYSTEM_PROMPT,
+      mcp_servers: {
+        tg: {
+          command: process.execPath,
+          args: [
+            "--import",
+            "tsx",
+            tgServer,
+            "--thread",
+            String(opts.threadId),
+            "--cwd",
+            opts.cwd,
+          ],
+          cwd: projectRoot,
+          enabled_tools: ["send"],
+          required: true,
+        },
+      },
+    },
+  });
+  const options = {
+    workingDirectory: opts.cwd,
+    skipGitRepoCheck: true,
+    threadSource: "cli",
+    model: opts.model ?? cfg.codexModel,
+    ...(opts.effort
+      ? { modelReasoningEffort: opts.effort as ModelReasoningEffort }
+      : {}),
+    approvalPolicy: "never" as const,
+    sandboxMode:
+      cfg.permission === "bypass" ? ("danger-full-access" as const) : ("workspace-write" as const),
+    networkAccessEnabled: true,
+    webSearchMode: "live" as const,
+  };
+  return opts.sessionId
+    ? codex.resumeThread(opts.sessionId, options)
+    : codex.startThread(options);
+}
+
+export function readCodexUsage(usage: CodexUsage): {
+  inTokens: number;
+  outTokens: number;
+  costUsd: number;
+} {
+  return {
+    inTokens:
+      usage.input_tokens + usage.cached_input_tokens + (usage.cache_write_input_tokens ?? 0),
+    outTokens: usage.output_tokens,
+    // The CLI reports token counts but not price/cost. Keep accounting honest
+    // instead of estimating against a pricing table that can change.
+    costUsd: 0,
+  };
+}
+
+export function codexToolName(item: ThreadItem): string | null {
+  switch (item.type) {
+    case "command_execution":
+      return "Shell";
+    case "file_change":
+      return "apply_patch";
+    case "web_search":
+      return "web_search";
+    case "mcp_tool_call":
+      return item.server === "tg" && item.tool === "send"
+        ? null
+        : `mcp__${item.server}__${item.tool}`;
+    case "todo_list":
+      return "update_plan";
+    default:
+      return null;
+  }
+}
+
+export const isCodexSend = (item: ThreadItem): boolean =>
+  item.type === "mcp_tool_call" && item.server === "tg" && item.tool === "send";

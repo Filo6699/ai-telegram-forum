@@ -1,4 +1,3 @@
-import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Bot } from "grammy";
 import { cfg } from "./config.ts";
 import {
@@ -34,7 +33,14 @@ import { fmtTokens } from "./fmt.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { fetchPlanLimits, planLimitsText } from "./limits.ts";
 import { registerPermissionButtons } from "./permission.ts";
-import { liveSession, sessionFor } from "./session.ts";
+import { liveSession, sessionFor, type AgentInput } from "./session.ts";
+import {
+  asProvider,
+  parseProvider,
+  providerGroup,
+  providerLabel,
+  type Provider,
+} from "./provider.ts";
 import { startSweep } from "./sweep.ts";
 import {
   createTopic,
@@ -57,8 +63,9 @@ function topicUsageText(t: Topic): string {
   return (
     `📊 *${t.title}*\n` +
     `turns: ${t.turns}\n` +
-    `model: ${modelLabel(t.model, defaultModel())}\n` +
-    `effort: ${effortLabel(t.effort, defaultEffort(t.cwd))}\n` +
+    `agent: ${providerLabel(t.provider)}\n` +
+    `model: ${modelLabel(t.model, defaultModel(t.provider), t.provider)}\n` +
+    `effort: ${effortLabel(t.effort, defaultEffort(t.cwd, t.provider))}\n` +
     `tokens: ${fmt(t.in_tokens)} in / ${fmt(t.out_tokens)} out\n` +
     `cost: $${t.cost_usd.toFixed(4)}`
   );
@@ -66,11 +73,13 @@ function topicUsageText(t: Topic): string {
 
 function totalsText(): string {
   const s = totals();
+  const provider = nextProvider ?? cfg.provider;
   return (
     `📊 *All topics*\n` +
     `topics: ${s.topics} · turns: ${s.turns}\n` +
-    `next session model: ${modelLabel(nextModel ?? null, defaultModel())}\n` +
-    `next session effort: ${effortLabel(nextEffort ?? null, defaultEffort(cfg.defaultCwd))}\n` +
+    `next session agent: ${providerLabel(provider)}\n` +
+    `next session model: ${modelLabel(nextModel ?? null, defaultModel(provider), provider)}\n` +
+    `next session effort: ${effortLabel(nextEffort ?? null, defaultEffort(cfg.defaultCwd, provider))}\n` +
     `tokens: ${fmt(s.in_tokens)} in / ${fmt(s.out_tokens)} out\n` +
     `cost: $${s.cost_usd.toFixed(4)}`
   );
@@ -83,6 +92,7 @@ function totalsText(): string {
  */
 let nextEffort: Effort | undefined;
 let nextModel: Model | undefined;
+let nextProvider: Provider | undefined;
 
 /**
  * Where a `/effort` or `/model` lands. `null` is the launcher — the choice is
@@ -112,9 +122,10 @@ async function applyEffort(
   const t = await target(ctx, thread);
   if (t === undefined) return;
   if (t === null) {
+    const provider = nextProvider ?? cfg.provider;
     nextEffort = level;
     if (announce) {
-      const label = effortLabel(level, defaultEffort(cfg.defaultCwd));
+      const label = effortLabel(level, defaultEffort(cfg.defaultCwd, provider));
       await ctx.reply(`⚙️ next session: ${label}`, { message_thread_id: thread });
     }
     return;
@@ -123,7 +134,7 @@ async function applyEffort(
   if (s) s.setEffort(level);
   else setEffort(t.thread_id, level);
   if (announce) {
-    await ctx.reply(`⚙️ effort: ${effortLabel(level, defaultEffort(t.cwd))}`, {
+    await ctx.reply(`⚙️ effort: ${effortLabel(level, defaultEffort(t.cwd, t.provider))}`, {
       message_thread_id: thread,
     });
   }
@@ -139,11 +150,15 @@ async function applyModel(
   const t = await target(ctx, thread);
   if (t === undefined) return;
   if (t === null) {
+    const provider = nextProvider ?? cfg.provider;
     nextModel = model;
     if (announce) {
-      await ctx.reply(`🤖 next session: ${modelLabel(model, defaultModel())}`, {
+      await ctx.reply(
+        `🤖 next session: ${modelLabel(model, defaultModel(provider), provider)}`,
+        {
         message_thread_id: thread,
-      });
+        },
+      );
     }
     return;
   }
@@ -151,7 +166,31 @@ async function applyModel(
   if (s) s.setModel(model);
   else setModel(t.thread_id, model);
   if (announce) {
-    await ctx.reply(`🤖 model: ${modelLabel(model, defaultModel())}`, {
+    await ctx.reply(`🤖 model: ${modelLabel(model, defaultModel(t.provider), t.provider)}`, {
+      message_thread_id: thread,
+    });
+  }
+}
+
+/** Provider is chosen before a topic exists; changing it would switch session
+ * stores and cannot preserve history, so established topics keep theirs. */
+async function applyProvider(
+  ctx: any,
+  thread: number | undefined,
+  provider: Provider,
+  announce = true,
+): Promise<void> {
+  if (!isLauncher(thread)) {
+    await ctx.reply("⚠️ an existing topic can't change agent — choose it in the launcher.", {
+      message_thread_id: thread,
+    });
+    return;
+  }
+  nextProvider = provider;
+  nextModel = undefined;
+  nextEffort = undefined;
+  if (announce) {
+    await ctx.reply(`🧠 next session agent: ${providerLabel(provider)}`, {
       message_thread_id: thread,
     });
   }
@@ -215,7 +254,11 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
   if (cmd === "/resume") {
     const t = await sessionTopic(ctx, thread);
     if (t) {
-      await ctx.reply(`\`\`\`\ncd ${shq(t.cwd)} && claude --resume ${t.session_id}\n\`\`\``, {
+      const resume =
+        t.provider === "codex"
+          ? `codex resume ${t.session_id}`
+          : `claude --resume ${t.session_id}`;
+      await ctx.reply(`\`\`\`\ncd ${shq(t.cwd)} && ${resume}\n\`\`\``, {
         message_thread_id: thread,
         parse_mode: "Markdown",
       });
@@ -223,13 +266,50 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
     return true;
   }
 
+  if (cmd === "/provider" || cmd === "/agent") {
+    const arg = ctx.message.text.trim().split(/\s+/)[1];
+    if (arg) {
+      const provider = parseProvider(arg);
+      if (!provider) {
+        await ctx.reply("⚠️ unknown agent. Use `claude` or `codex`.", {
+          message_thread_id: thread,
+          parse_mode: "Markdown",
+        });
+      } else {
+        await applyProvider(ctx, thread, provider);
+      }
+      return true;
+    }
+    if (!isLauncher(thread)) {
+      await ctx.reply("⚠️ an existing topic can't change agent — choose it in the launcher.", {
+        message_thread_id: thread,
+      });
+      return true;
+    }
+    const current = nextProvider ?? cfg.provider;
+    void askPick(bot, {
+      threadId: thread,
+      title: "agent for the next session",
+      groups: [providerGroup(current, cfg.provider)],
+    })
+      .then(({ picks }) =>
+        applyProvider(ctx, thread, asProvider(picks.p ?? null, cfg.provider), false),
+      )
+      .catch((err) => console.warn(`[${cmd}] applying the picked value failed:`, String(err)));
+    return true;
+  }
+
   if (cmd === "/effort" || cmd === "/model") {
+    const topic = isLauncher(thread) ? undefined : getTopic(thread!);
+    const provider = topic?.provider ?? nextProvider ?? cfg.provider;
     const arg = ctx.message.text.trim().split(/\s+/)[1];
     const isEffort = cmd === "/effort";
     if (arg) {
-      const value = isEffort ? parseEffort(arg) : parseModel(arg);
+      const value = isEffort ? parseEffort(arg, provider) : parseModel(arg, provider);
       if (value === undefined) {
-        await ctx.reply(isEffort ? effortUsage : modelUsage, { message_thread_id: thread });
+        await ctx.reply(isEffort ? effortUsage(provider) : modelUsage(provider), {
+          message_thread_id: thread,
+        });
         return true;
       }
       if (isEffort) await applyEffort(ctx, thread, value as Effort);
@@ -240,19 +320,24 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
     // like the launch picker: waiting on a button from inside a handler would
     // block the very callback that settles it.
     const inLauncher = isLauncher(thread);
-    const topic = inLauncher ? undefined : getTopic(thread!);
     const where = inLauncher ? "the next session" : "this topic";
     const cwd = topic?.cwd ?? cfg.defaultCwd;
     void askPick(bot, {
       threadId: thread,
       title: `${isEffort ? "effort" : "model"} for ${where}`,
       groups: isEffort
-        ? [effortGroup(inLauncher ? (nextEffort ?? null) : (topic?.effort ?? null), cwd)]
-        : [modelGroup(inLauncher ? (nextModel ?? null) : (topic?.model ?? null))],
+        ? [
+            effortGroup(
+              inLauncher ? (nextEffort ?? null) : (topic?.effort ?? null),
+              cwd,
+              provider,
+            ),
+          ]
+        : [modelGroup(inLauncher ? (nextModel ?? null) : (topic?.model ?? null), provider)],
     })
       .then(({ picks }) =>
         isEffort
-          ? applyEffort(ctx, thread, asEffort(picks.e ?? null), false)
+          ? applyEffort(ctx, thread, asEffort(picks.e ?? null, provider), false)
           : applyModel(ctx, thread, asModel(picks.m ?? null), false),
       )
       .catch((err) => console.warn(`[${cmd}] applying the picked value failed:`, String(err)));
@@ -283,6 +368,14 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
   const t = thread !== undefined ? getTopic(thread) : undefined;
   const local = t ? topicUsageText(t) : totalsText();
 
+  if (t?.provider === "codex") {
+    await ctx.reply(`${local}\n\n_Codex reports per-turn tokens but not plan limits or cost here._`, {
+      message_thread_id: thread,
+      parse_mode: "Markdown",
+    });
+    return true;
+  }
+
   // Asking claude.ai for the plan limits can take a few seconds (and may have
   // to start a child), so post the local tally first and fill the rest in.
   const sent = await ctx.reply(`${local}\n\n⏳ _checking plan limits…_`, {
@@ -309,17 +402,8 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
 
 let botUsername = "";
 
-/** The message as the agent sees it: text alone, or images plus their caption. */
-function contentOf(text: string, images: ImagePart[]): SDKUserMessage["message"]["content"] {
-  if (!images.length) return text;
-  const blocks: Exclude<SDKUserMessage["message"]["content"], string> = images.map((img) => ({
-    type: "image",
-    source: { type: "base64", media_type: img.mediaType as any, data: img.data },
-  }));
-  // An empty text block is rejected by the API — a caption-less photo is fine.
-  if (text) blocks.push({ type: "text", text });
-  return blocks;
-}
+/** Provider-neutral message; each SDK gets the image representation it accepts. */
+const contentOf = (text: string, images: ImagePart[]): AgentInput => ({ text, images });
 
 /**
  * Spin up a new topic + session for a launcher message.
@@ -333,6 +417,7 @@ function contentOf(text: string, images: ImagePart[]): SDKUserMessage["message"]
 async function launch(ctx: any, text: string, images: ImagePart[]): Promise<void> {
   const { cwd, prompt } = resolveCwd(text);
   const title = placeholderTitle(prompt || "image");
+  const provider = nextProvider ?? cfg.provider;
 
   // Nothing exists yet: the model and the effort are chosen first — in one
   // picker, so a launch costs one message and one wait — and only then is the
@@ -342,25 +427,30 @@ async function launch(ctx: any, text: string, images: ImagePart[]): Promise<void
   const { picks, messageId } = await askPick(bot, {
     threadId: cfg.launcherThreadId,
     title: `«${title}»`,
-    groups: [modelGroup(nextModel ?? null), effortGroup(nextEffort ?? null, cwd)],
+    groups: [
+      modelGroup(nextModel ?? null, provider),
+      effortGroup(nextEffort ?? null, cwd, provider),
+    ],
     firstWaitMs: LAUNCH_WAIT_MS,
     rewritten: true,
   });
-  const effort = asEffort(picks.e ?? null);
+  const effort = asEffort(picks.e ?? null, provider);
   const model = asModel(picks.m ?? null);
   nextEffort = undefined;
   nextModel = undefined;
+  nextProvider = undefined;
 
   const topic = await ctx.api.createForumTopic(cfg.chatId, title);
   const tid = topic.message_thread_id;
-  createTopic({ threadId: tid, cwd, title, effort, model });
+  createTopic({ threadId: tid, cwd, title, provider, effort, model });
 
   // The picker becomes the launch line: one message for one launch, rather than
   // the settled picker and a "→ …" note sitting one above the other.
   const line =
     `→ «${title}»  (cwd: ${cwd})` +
-    `  🤖 ${modelLabel(model, defaultModel())}` +
-    `  ⚙️ ${effortLabel(effort, defaultEffort(cwd))}`;
+    `  🧠 ${providerLabel(provider)}` +
+    `  🤖 ${modelLabel(model, defaultModel(provider), provider)}` +
+    `  ⚙️ ${effortLabel(effort, defaultEffort(cwd, provider))}`;
   const posted =
     messageId !== null &&
     (await ctx.api
@@ -387,7 +477,7 @@ async function launch(ctx: any, text: string, images: ImagePart[]): Promise<void
     console.warn(`[launch] echoing the prompt into ${tid} failed:`, String(err));
   }
 
-  await sessionFor(bot, { thread_id: tid, cwd, session_id: null, effort, model }).send(
+  await sessionFor(bot, { thread_id: tid, cwd, session_id: null, provider, effort, model }).send(
     contentOf(prompt, images),
   );
 }
@@ -423,8 +513,8 @@ async function route(ctx: any, text: string, images: ImagePart[]): Promise<void>
     setStatus(thread, "active");
   }
 
-  // The session takes it from here: if a turn is already running, this lands
-  // in front of the agent at its next step rather than waiting in a queue.
+  // Claude receives this at its next step. Codex's SDK cannot steer a running
+  // turn, so the same input becomes the next turn without interrupting it.
   await sessionFor(bot, t).send(contentOf(text, images));
 }
 
@@ -484,7 +574,7 @@ bot.on("message", async (ctx) => {
   if (inbound.as === "image") {
     let image: ImagePart;
     try {
-      image = await fetchImage(ctx.api, inbound.fileId, inbound.mime);
+      image = await fetchImage(ctx.api, inbound.fileId, inbound.mime, inbound.uniqueId);
     } catch (err) {
       console.warn("[media] fetching the image failed:", String(err));
       await ctx
@@ -522,15 +612,19 @@ async function main() {
   console.log(
     `[bot] forum chat ${cfg.chatId}, launcher thread ${cfg.launcherThreadId ?? "General"}`,
   );
-  console.log(`[bot] permission=${cfg.permission} model=${cfg.model}`);
+  console.log(
+    `[bot] permission=${cfg.permission} provider=${cfg.provider} ` +
+      `model=${defaultModel(cfg.provider)}`,
+  );
 
   await bot.api.setMyCommands([
     { command: "usage", description: "Tokens/cost here (or all in the launcher) + plan limits" },
+    { command: "provider", description: "Next session agent: Claude or Codex" },
     { command: "effort", description: "Reasoning effort: /effort high, or /effort for buttons" },
     { command: "model", description: "Model: /model sonnet, or /model for buttons" },
     { command: "stop", description: "Interrupt the turn running in this topic" },
     { command: "resume", description: "Shell command to continue this session in a terminal" },
-    { command: "id", description: "Claude session id of this topic" },
+    { command: "id", description: "Agent session id of this topic" },
   ]);
 
   // Pickers first: they pass callbacks they don't own on to the permission

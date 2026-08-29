@@ -36,7 +36,7 @@ export async function fetchPlanLimits(): Promise<PlanLimits | null> {
       await new Promise<void>((resolve) => abort.signal.addEventListener("abort", () => resolve()));
     })(),
     options: {
-      model: cfg.model,
+      model: cfg.claudeModel,
       permissionMode: "default",
       abortController: abort,
       stderr: () => {},

@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { parseProvider } from "./provider.ts";
 
 function req(name: string): string {
   const v = process.env[name];
@@ -38,6 +39,9 @@ function parseProjects(raw: string | undefined): Record<string, string> {
 const hours = (name: string, fallback: number) =>
   (Number(process.env[name] ?? fallback)) * 3600_000;
 
+const provider = parseProvider(process.env.PROVIDER ?? "claude");
+if (!provider) throw new Error(`PROVIDER must be "claude" or "codex"`);
+
 export const cfg = {
   token: req("BOT_TOKEN"),
   chatId: reqNum("FORUM_CHAT_ID"),
@@ -47,7 +51,11 @@ export const cfg = {
   defaultCwd: req("DEFAULT_CWD"),
   projects: parseProjects(process.env.PROJECTS),
 
-  model: process.env.MODEL ?? "claude-opus-4-8",
+  provider,
+  // MODEL remains Claude's backwards-compatible name. Codex has a separate
+  // default so one daemon can host topics from both providers.
+  claudeModel: process.env.CLAUDE_MODEL ?? process.env.MODEL ?? "claude-opus-4-8",
+  codexModel: process.env.CODEX_MODEL ?? "gpt-5.6-sol",
   // "auto": auto-approve the ALLOWED_TOOLS allowlist, deny everything else,
   // and block obviously destructive shell commands. "bypass": allow all tools.
   permission: (process.env.PERMISSION ?? "auto") as "auto" | "bypass",
@@ -58,9 +66,8 @@ export const cfg = {
 
   deleteAfterMs: hours("DELETE_AFTER_HOURS", 168),
 
-  // How long a topic's Claude process is kept alive after its last message.
-  // While it lives, new messages reach the agent mid-turn; once it's gone the
-  // next message resumes the same session from disk.
+  // How long a live topic object is retained. Claude also keeps its child warm;
+  // Codex uses a subprocess per turn and keeps only its resumable thread here.
   sessionIdleMs: Number(process.env.SESSION_IDLE_MINUTES ?? 20) * 60_000,
 
   // How long a permission prompt waits for a button press before denying.

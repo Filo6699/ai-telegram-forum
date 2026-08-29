@@ -1,4 +1,5 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import type { EffortLevel as ClaudeEffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import type { Bot } from "grammy";
 import { cfg } from "./config.ts";
 import type { Effort } from "./effort.ts";
@@ -79,10 +80,10 @@ export function queryOptions(opts: {
   return {
     cwd: opts.cwd,
     // Nothing picked for this topic — the configured MODEL is the default.
-    model: opts.model ?? cfg.model,
+    model: opts.model ?? cfg.claudeModel,
     // Unset means unset: with no `effort` the CLI resolves its own default from
     // settings and the model, which is the default we advertise.
-    ...(opts.effort ? { effort: opts.effort } : {}),
+    ...(opts.effort ? { effort: opts.effort as ClaudeEffortLevel } : {}),
     mcpServers: { tg: opts.channel.server },
     systemPrompt: { type: "preset", preset: "claude_code", append: TG_SYSTEM_PROMPT },
     stderr: opts.onStderr,

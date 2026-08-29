@@ -42,8 +42,54 @@ export interface TgChannel {
   resetSent(): void;
 }
 
+export interface TgSendArgs {
+  text?: string;
+  files?: string[];
+}
+
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
 const failure = (s: string) => ({ ...text(s), isError: true as const });
+
+/** Provider-neutral implementation shared by Claude's in-process MCP server
+ * and the stdio MCP server Codex starts for each turn. */
+export async function runTgSend(
+  out: TopicRenderer,
+  cwd: string,
+  args: TgSendArgs,
+): Promise<ReturnType<typeof text> | ReturnType<typeof failure>> {
+  const body = args.text ?? "";
+  const paths = args.files ?? [];
+  if (!body.trim() && !paths.length) return failure("refused: empty message");
+
+  if (!paths.length) {
+    const id = await out.sendText(body);
+    return id === null
+      ? failure("delivery failed — Telegram rejected every rendering")
+      : text(`sent (id: ${id})`);
+  }
+
+  const { files, errors } = resolveOutgoing(cwd, paths);
+  if (!files.length) {
+    const id = body.trim() ? await out.sendText(body) : null;
+    return failure(
+      `no file could be attached:\n${errors.join("\n")}` +
+        (id !== null ? "\n(the text was sent on its own)" : ""),
+    );
+  }
+
+  const { ids, captioned, failed } = await out.sendMedia(files, body);
+  if (body.trim() && !captioned) {
+    const id = await out.sendText(body);
+    if (id !== null) ids.push(id);
+  }
+  if (!ids.length) return failure("delivery failed — Telegram rejected the upload");
+
+  const notes = [...errors, ...failed.map((f) => `${f.path}: upload rejected`)];
+  return text(
+    `sent (${files.length - failed.length} file(s), id: ${ids.at(-1)})` +
+      (notes.length ? `\nnot attached:\n${notes.join("\n")}` : ""),
+  );
+}
 
 /**
  * An in-process MCP server that lets the agent post into one specific topic.
@@ -75,45 +121,12 @@ export function createTgChannel(out: TopicRenderer, cwd: string): TgChannel {
             ),
         },
         async (args) => {
-          const body = args.text ?? "";
-          const paths = args.files ?? [];
-          if (!body.trim() && !paths.length) return failure("refused: empty message");
-
-          if (!paths.length) {
-            const id = await out.sendText(body);
-            if (id === null) {
-              return failure("delivery failed — Telegram rejected every rendering");
-            }
-            sent++;
-            return text(`sent (id: ${id})`);
-          }
-
-          const { files, errors } = resolveOutgoing(cwd, paths);
-          if (!files.length) {
-            // Nothing to attach: the words still matter more than the files.
-            const id = body.trim() ? await out.sendText(body) : null;
-            if (id !== null) sent++;
-            return failure(
-              `no file could be attached:\n${errors.join("\n")}` +
-                (id !== null ? "\n(the text was sent on its own)" : ""),
-            );
-          }
-
-          const { ids, captioned, failed } = await out.sendMedia(files, body);
-          // A caption that didn't fit, or files that never went out, still owe
-          // the user the text — a send is not allowed to swallow it.
-          if (body.trim() && !captioned) {
-            const id = await out.sendText(body);
-            if (id !== null) ids.push(id);
-          }
-          if (!ids.length) return failure("delivery failed — Telegram rejected the upload");
-          sent++;
-
-          const notes = [...errors, ...failed.map((f) => `${f.path}: upload rejected`)];
-          return text(
-            `sent (${files.length - failed.length} file(s), id: ${ids.at(-1)})` +
-              (notes.length ? `\nnot attached:\n${notes.join("\n")}` : ""),
-          );
+          const result = await runTgSend(out, cwd, args);
+          const delivered =
+            !("isError" in result) ||
+            result.content[0]?.text.includes("text was sent on its own");
+          if (delivered) sent++;
+          return result;
         },
         { alwaysLoad: true },
       ),

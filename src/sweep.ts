@@ -24,7 +24,7 @@ function isNetworkDown(err: unknown): boolean {
 
 /**
  * Drop a topic we can no longer reach: end its session and forget the DB row.
- * The Claude session on disk is left alone — sweeping is about Telegram
+ * The provider session on disk is left alone — sweeping is about Telegram
  * topics, never about transcripts.
  */
 function forget(t: Topic, reason: string): void {

@@ -5,9 +5,9 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg)
 
 A tiny broker daemon that bridges a **Telegram forum supergroup** to **Claude Code**
-via the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk).
+or **OpenAI Codex**, via their official TypeScript SDKs.
 
-**One topic = one Claude session.** A dedicated *"New session"* topic acts as a
+**One topic = one agent session.** A dedicated *"New session"* topic acts as a
 launcher: send it a message and the bot spins up a fresh topic + session and
 continues the conversation there. Long-idle topics are deleted, so the forum
 stays tidy.
@@ -26,14 +26,15 @@ stays tidy.
   session A session B session C
 ```
 
-Because each turn is a separate `query({ resume })` call, **idle topics cost
-nothing at runtime** — a sleeping topic is just one row in SQLite. A subprocess
-only lives while a turn is being answered.
+**Idle topics cost nothing at the model API.** Claude keeps a warm subprocess
+for a configurable window; Codex starts one per turn. Both persist their native
+session id and resume from their own on-disk transcript.
 
 ## Requirements
 
 - Node.js **≥ 22** (uses the built-in `node:sqlite`, no native build step)
-- A Claude Code auth setup usable by the Agent SDK (same login you use for the CLI)
+- A CLI login for every provider you intend to use: `claude` for Claude Code,
+  `codex login` for Codex. API-key configurations supported by those CLIs work too.
 
 ## Setup
 
@@ -75,8 +76,13 @@ Everything happens by messaging the **New session** topic (or the General topic)
 | `@myrepo add a health endpoint` | new topic, cwd = `PROJECTS.myrepo` |
 | `/srv/app bump deps` | new topic, cwd = `/srv/app` |
 
-Then just keep chatting **inside that topic** — each message resumes the same
-Claude session. Writing into a closed (archived) topic reopens it.
+Then just keep chatting **inside that topic** — each message resumes that
+topic's Claude or Codex session. Writing into a closed topic reopens it.
+
+`PROVIDER=claude|codex` chooses the default for new topics. `/provider codex`
+or `/provider claude` in the launcher changes the next launch only; `/provider`
+shows buttons. A topic remembers its provider and cannot switch later because
+that would abandon its native session history.
 
 **Pictures work too.** Send a photo (or an image sent as a file — JPEG, PNG,
 GIF, WebP) with an optional caption, in the launcher or inside a topic, and the
@@ -87,7 +93,8 @@ messages; the agent gets them together at its next step.
 file, a GIF, a video note, an animated sticker, a `.md` spec, a CSV — anything
 that isn't an image is saved under `data/inbox/` and handed to the agent as a
 path, prefixed with a line saying what it is: `[voice message (0:12), 45 KB]`.
-Static stickers are pictures, so they go in as pixels. The kinds with no file
+Images are kept there too so Codex can receive the local paths its SDK expects;
+Claude receives the same bytes as base64. Static stickers are pictures. The kinds with no file
 behind them — a location, a venue, a contact, a poll, a dice roll — arrive as
 the words that describe them. Your caption always rides along.
 
@@ -102,26 +109,26 @@ up inline, everything else arrives as a file, and its text rides along as the
 caption. Files over Telegram's 50 MB upload limit are refused, and the agent is
 told so rather than left thinking it delivered them.
 
-`/usage` reports the tokens and cost spent in that topic (in the launcher: the
-totals across every topic), followed by your Claude plan's own rate-limit
+`/usage` reports the tokens spent in that topic (in the launcher: the totals
+across every topic). Claude turns also report SDK cost and are followed by your Claude plan's own rate-limit
 windows — the 5-hour and weekly meters the CLI's `/usage` shows, drawn as bars
 with the time until each resets. Those come from claude.ai, so they cover all your Claude
 Code activity, not just this bot; on an API-key or Bedrock/Vertex setup there
-are no plan limits and that part is left out.
+are no plan limits and that part is left out. Codex's TypeScript SDK reports
+tokens but not cost or plan-limit windows, so the bot does not invent either.
 
-**Model and reasoning effort.** Every new session opens with one picker in the
-launcher — the models on top, then `low`, `medium`, `high`, `xhigh`, `max`, each
+**Model and reasoning effort.** Every new session opens with one provider-specific picker in the
+launcher — the models on top, then the supported effort levels, each
 row ticked on what's already in force — and the topic is only created once
 that's settled. One message and one wait for both. Ignore it and the
-session starts a few seconds later on exactly what's ticked: `MODEL` from your
-`.env` for the model, and for the effort no level at all — the bot keeps no
+session starts a few seconds later on exactly what's ticked: `CLAUDE_MODEL` or
+`CODEX_MODEL` from `.env` for the model, and for the effort no level at all — the bot keeps no
 default of its own, so nothing is passed and the CLI resolves it as usual. That
-tick is read from the same settings files the CLI reads (`effortLevel` in the
-managed, project and user `settings.json`), which is why a level you set in a
-terminal shows up here. Touch a button and the launch waits for you: press
+Claude's tick is read from the same settings files the CLI reads; Codex's comes
+from `model_reasoning_effort` in `~/.codex/config.toml` when present. Touch a button and the launch waits for you: press
 buttons until you're happy, then **Confirm**, or just stop pressing and it goes
 with your last pick a minute later. Once it's settled that same message turns
-into the launch line — `→ «title» (cwd: …) 🤖 Opus 5 ⚙️ high` — so a launch is
+into the launch line — `→ «title» (cwd: …) 🧠 Codex 🤖 GPT-5.6 Sol ⚙️ low` — so a launch is
 one message in the launcher, not a picker plus a note.
 
 `/effort high` sets it without the buttons; `/effort` alone brings them up.
@@ -133,9 +140,10 @@ the *next* session only, once, and shows up pre-selected in that launch's
 picker. The level a turn ran
 on appears in its summary line and in `/usage`.
 
-`/model` works the same way, one for one: `/model sonnet` (or `opus`, `haiku`,
-`fable`, or a full `claude-…` id) sets it, `/model` alone brings up the buttons,
-`/model default` hands it back to `MODEL` from your `.env` — which is what the
+`/model` works the same way, one for one: Claude offers `opus`, `sonnet`,
+`haiku`, and `fable`; Codex offers `sol`, `terra`, `luna`, and full model ids.
+`/model` alone brings up the buttons. `/model default` hands it back to the
+provider's model in `.env` — which is what the
 tick sits on when nothing is picked, so the default is a button like any other.
 Inside a topic it swaps the model on the live session from the next turn on and
 is remembered across an idle shutdown; in the launcher it pre-selects the next
@@ -147,15 +155,18 @@ it was working are dropped. The session itself stays up, so the next message
 carries on from where it stopped.
 
 `/resume`, inside a topic, hands back the one line that continues that same
-session in a terminal — `cd <the topic's cwd> && claude --resume <session id>`.
+session in a terminal — `claude --resume <id>` or `codex resume <id>` in its cwd.
 `/id` gives just the session id. Both only work inside a session topic, and
 only once the first turn has recorded a session id.
 
-## Moving a terminal session to Telegram (`/telegramify`)
+## Moving a Claude terminal session to Telegram (`/telegramify`)
 
-A session you started in the terminal already lives on disk, so adopting it is
+A Claude session you started in the terminal already lives on disk, so adopting it is
 just a matter of binding a topic to its id — nothing is copied or replayed into
 the session.
+
+Codex sessions are natively resumable with `/resume`, but there is no
+`/codexify` adoption command yet; `/telegramify` remains Claude-specific.
 
 ```bash
 npm run install-command      # writes ~/.claude/commands/telegramify.md, once
@@ -204,7 +215,7 @@ The chosen cwd is stored per topic, so inside a topic you never repeat it.
 
 Two modes:
 
-- **`auto`** (default, recommended) — auto-approves only the tools in
+- **`auto`** (default, recommended) — for Claude, auto-approves only the tools in
   `ALLOWED_TOOLS`. Anything else asks you in the topic, with ✅ / ❌ / "always
   allow here" buttons, and waits. No answer within
   `PERMISSION_TIMEOUT_MINUTES` (default 10) counts as a deny, so a turn can't
@@ -214,10 +225,15 @@ Two modes:
   blanket approval. Tighten it further by trimming `ALLOWED_TOOLS` — e.g. drop
   `Bash` for a read/edit-only assistant, or drop `Write,Edit` for read-only.
   "Always allow" lasts as long as the topic's live session, not forever.
-- **`bypass`** — approves every tool with no checks and never asks.
+- **`auto` for Codex** — runs with `approvalPolicy: never` inside Codex's
+  `workspace-write` sandbox, with network access. The Codex TypeScript SDK does
+  not expose interactive approval callbacks, so it cannot wait on Telegram
+  buttons; sandbox violations are returned to the agent as failures.
+- **`bypass`** — Claude skips its checks; Codex uses `danger-full-access`.
+  Neither asks before running a tool.
 
-> ⚠️ **`bypass` and even `auto` let Claude modify files and run shell commands
-> in the target `cwd` without asking.** The Bash denylist is defense-in-depth,
+> ⚠️ **`bypass` and even `auto` let the agent modify files and run shell commands
+> in the target `cwd` without asking.** Claude's Bash denylist is defense-in-depth,
 > not a sandbox. Only point this at directories and machines you trust, and
 > prefer running it as a low-privilege user.
 
@@ -229,15 +245,15 @@ active ──idle DELETE_AFTER_HOURS──▶ deleted
 
 A sweep runs every 5 min and only ever deletes — topics are never auto-closed,
 since closing one pushes a Telegram notification for a topic you've already
-stopped using. Default: delete after 7 days idle. The Claude session on disk
+stopped using. Default: delete after 7 days idle. The provider session on disk
 survives: deleting a topic drops the Telegram side and nothing else, so the
 transcript stays resumable from the terminal.
 
-Separately, a topic's Claude process is shut down after `SESSION_IDLE_MINUTES`
-(default 20) of silence. That's invisible from Telegram — the next message
-resumes the same session — but while the process is warm, anything you send is
-handed to the agent at its next step instead of waiting for the current turn to
-finish.
+Separately, Claude's warm child and the in-memory topic object are dropped after
+`SESSION_IDLE_MINUTES` (default 20) of silence. That's invisible from Telegram:
+the next message resumes from disk. Claude can consume a new message at its next
+step while a turn is running. The current Codex SDK has no steering API, so a
+message received during a Codex turn becomes the next turn automatically.
 
 ## Files
 
@@ -252,8 +268,11 @@ finish.
 | `src/picker.ts` | the inline-button picker `/effort` and `/model` share |
 | `src/effort.ts` | reasoning-effort buttons and `/effort` |
 | `src/model.ts` | model buttons and `/model` |
+| `src/provider.ts` | Claude/Codex selection and `/provider` |
 | `src/claude.ts` | SDK options: model, effort, permissions, usage accounting |
-| `src/tg-tools.ts` | in-process MCP server: the agent's own `send` tool (text + files) |
+| `src/codex.ts` | Codex SDK options, thread/input/event adaptation |
+| `src/codex-tg-server.ts` | Codex's topic-bound stdio MCP `send` server |
+| `src/tg-tools.ts` | shared `send` implementation + Claude's in-process MCP server |
 | `src/status.ts` | live status line, then the turn summary |
 | `src/limits.ts` | plan rate limits (5-hour / weekly) behind `/usage` |
 | `src/render.ts` | markdown → Telegram messages, with format fallback |
@@ -266,8 +285,10 @@ finish.
 
 ## Limitations
 
-- The Agent SDK has no clean per-turn abort yet; a runaway turn finishes or you
-  restart the process. Consider adding `maxTurns` in `claude.ts` if needed.
+- Codex's TypeScript SDK does not expose mid-turn steering, interactive approval
+  callbacks, generated titles, plan-limit windows, or cost. The broker uses the
+  closest safe behavior described above. `/stop`, resume, model/effort changes,
+  images, tool status, token usage, and the direct `send`/file tool do work.
 - The agent decides when to write, through its `send` tool. A long turn isn't
   silent — a live status line tracks tool activity and ends as a summary
   (duration, tool calls, tokens, cost) — but there is no token-by-token
