@@ -26,7 +26,15 @@ export function codexInput(input: CodexInput): Input {
     type: "local_image",
     path: image.path,
   }));
-  if (input.text) parts.unshift({ type: "text", text: input.text });
+  // The SDK passes images as `--image` flags and sends only text parts to the
+  // CLI over stdin. An image-only input therefore needs a non-empty prompt or
+  // `codex exec` exits before it ever opens the image.
+  const text = input.text.trim()
+    ? input.text
+    : input.images.length
+      ? "Examine the attached image."
+      : "";
+  if (text) parts.unshift({ type: "text", text });
   return parts.length ? parts : "[image]";
 }
 
