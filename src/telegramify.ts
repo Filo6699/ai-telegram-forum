@@ -197,7 +197,7 @@ async function main(): Promise<void> {
   // broker the session would look adopted and answer nothing.
   if (brokerPid() === null) {
     throw new Error(
-      "the claude-tg-forum broker isn't running — start it with `npm start` " +
+      "the ai-telegram-forum broker isn't running — start it with `npm start` " +
         `in ${process.cwd()} and try again`,
     );
   }

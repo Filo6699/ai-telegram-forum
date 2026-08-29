@@ -21,7 +21,7 @@ allowed-tools: Bash(npm --prefix ${repo} run telegramify:*)
 
 !\`npm --prefix ${repo} run --silent telegramify -- --session "$CLAUDE_CODE_SESSION_ID" --cwd "$PWD"\`
 
-The output above comes from the claude-tg-forum broker. Report to the user in one
+The output above comes from the ai-telegram-forum broker. Report to the user in one
 line whether this session moved to Telegram, and pass on the topic link (or the
 error) verbatim. Don't do anything else.
 `;

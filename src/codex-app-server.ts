@@ -63,7 +63,7 @@ export function codexRequest<T>(method: string, params?: unknown): Promise<T> {
         method: "initialize",
         params: {
           clientInfo: {
-            name: "claude-tg-forum",
+            name: "ai-telegram-forum",
             title: "Telegram broker",
             version: "0.1.0",
           },

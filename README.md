@@ -1,4 +1,4 @@
-# claude-tg-forum
+# ai-telegram-forum
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen.svg)](https://nodejs.org)
@@ -208,7 +208,7 @@ broker's command (use the broker's absolute directory when the session is in a
 different project):
 
 ```bash
-cd /path/to/claude-tg-forum && npm run codexify
+cd /path/to/ai-telegram-forum && npm run codexify
 ```
 
 From a regular shell, select a saved thread explicitly or adopt the newest CLI

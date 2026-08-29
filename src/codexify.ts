@@ -117,7 +117,7 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (brokerPid() === null) {
     throw new Error(
-      "the claude-tg-forum broker isn't running — start it with `npm start` " +
+      "the ai-telegram-forum broker isn't running — start it with `npm start` " +
         `in ${process.cwd()} and try again`,
     );
   }

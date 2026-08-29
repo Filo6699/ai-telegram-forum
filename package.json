@@ -1,17 +1,17 @@
 {
-  "name": "claude-tg-forum",
+  "name": "ai-telegram-forum",
   "version": "0.1.0",
   "description": "Telegram forum bridge for Claude Code and Codex — one topic = one agent session",
   "type": "module",
   "license": "MIT",
   "author": "Filo6699",
-  "homepage": "https://github.com/Filo6699/claude-tg-forum#readme",
+  "homepage": "https://github.com/Filo6699/ai-telegram-forum#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Filo6699/claude-tg-forum.git"
+    "url": "git+https://github.com/Filo6699/ai-telegram-forum.git"
   },
   "bugs": {
-    "url": "https://github.com/Filo6699/claude-tg-forum/issues"
+    "url": "https://github.com/Filo6699/ai-telegram-forum/issues"
   },
   "keywords": [
     "claude",
