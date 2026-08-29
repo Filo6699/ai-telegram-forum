@@ -58,7 +58,7 @@ export class TurnStatus {
   /** Post the placeholder. Called as soon as the turn starts, so the topic reacts at once. */
   async start(): Promise<void> {
     this.lastText = "⏳ …";
-    this.messageId = await this.out.sendText(this.lastText);
+    this.messageId = await this.out.sendText(this.lastText, { silent: true });
     this.lastEditAt = Date.now();
   }
 
@@ -118,7 +118,7 @@ export class TurnStatus {
     if (this.messageId === null) {
       // The placeholder never made it out — post the summary as its own message
       // rather than losing it.
-      await this.out.sendText(summary);
+      await this.out.sendText(summary, { silent: true });
       return;
     }
     // The one edit worth waiting for: it's the whole record of the turn.

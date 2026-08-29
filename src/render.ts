@@ -62,6 +62,11 @@ const safeFormat = (raw: string): string | null =>
 
 type Mode = "MarkdownV2" | "HTML" | undefined;
 
+interface SendTextOptions {
+  /** Suppress the push sound for immediate, bot-owned UI messages. */
+  silent?: boolean;
+}
+
 /**
  * Rendering tiers for one chunk, best first. Formatted output is never
  * truncated — cutting mid-escape or mid-tag is exactly what breaks the parse;
@@ -174,7 +179,7 @@ export class TopicRenderer {
   }
 
   /** Send one chunk. Returns its message id, or null if every tier failed. */
-  private async sendOne(raw: string): Promise<number | null> {
+  private async sendOne(raw: string, opts: SendTextOptions): Promise<number | null> {
     for (const { text, mode } of tiers(raw)) {
       if (!text || (mode && text.length > TG_LIMIT)) continue;
       // A 429 says nothing about the rendering: wait it out and retry the same
@@ -184,6 +189,7 @@ export class TopicRenderer {
         try {
           const sent = await this.api.sendMessage(this.chatId, text, {
             message_thread_id: this.threadId,
+            ...(opts.silent ? { disable_notification: true } : {}),
             ...(mode ? { parse_mode: mode } : {}),
           });
           return sent.message_id;
@@ -203,10 +209,10 @@ export class TopicRenderer {
   }
 
   /** Post text now. Returns the last message id sent, or null if nothing went out. */
-  async sendText(raw: string): Promise<number | null> {
+  async sendText(raw: string, opts: SendTextOptions = {}): Promise<number | null> {
     let last: number | null = null;
     for (const chunk of this.chunkRaw(flattenTables(raw))) {
-      const id = await this.sendOne(chunk);
+      const id = await this.sendOne(chunk, opts);
       if (id !== null) last = id;
     }
     return last;

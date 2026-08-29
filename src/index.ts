@@ -56,6 +56,14 @@ import {
 
 const bot = new Bot(cfg.token);
 
+/** Replies produced synchronously from an inbound update do not need to buzz
+ * the phone the user is already holding. Delayed agent output stays audible. */
+const replySilently = (
+  ctx: any,
+  text: string,
+  other: Record<string, unknown> = {},
+): Promise<any> => ctx.reply(text, { ...other, disable_notification: true });
+
 const isLauncher = (threadId: number | undefined) =>
   threadId === undefined || threadId === cfg.launcherThreadId;
 
@@ -105,7 +113,9 @@ async function target(ctx: any, thread: number | undefined): Promise<Topic | nul
   if (isLauncher(thread)) return null;
   const t = getTopic(thread!);
   if (t) return t;
-  await ctx.reply("⚠️ run this inside a session topic, not here.", { message_thread_id: thread });
+  await replySilently(ctx, "⚠️ run this inside a session topic, not here.", {
+    message_thread_id: thread,
+  });
   return undefined;
 }
 
@@ -128,7 +138,7 @@ async function applyEffort(
     nextEffort = level;
     if (announce) {
       const label = effortLabel(level, defaultEffort(cfg.defaultCwd, provider));
-      await ctx.reply(`⚙️ next session: ${label}`, { message_thread_id: thread });
+      await replySilently(ctx, `⚙️ next session: ${label}`, { message_thread_id: thread });
     }
     return;
   }
@@ -136,7 +146,7 @@ async function applyEffort(
   if (s) s.setEffort(level);
   else setEffort(t.thread_id, level);
   if (announce) {
-    await ctx.reply(`⚙️ effort: ${effortLabel(level, defaultEffort(t.cwd, t.provider))}`, {
+    await replySilently(ctx, `⚙️ effort: ${effortLabel(level, defaultEffort(t.cwd, t.provider))}`, {
       message_thread_id: thread,
     });
   }
@@ -155,10 +165,11 @@ async function applyModel(
     const provider = nextProvider ?? cfg.provider;
     nextModel = model;
     if (announce) {
-      await ctx.reply(
+      await replySilently(
+        ctx,
         `🤖 next session: ${modelLabel(model, defaultModel(provider), provider)}`,
         {
-        message_thread_id: thread,
+          message_thread_id: thread,
         },
       );
     }
@@ -168,9 +179,11 @@ async function applyModel(
   if (s) s.setModel(model);
   else setModel(t.thread_id, model);
   if (announce) {
-    await ctx.reply(`🤖 model: ${modelLabel(model, defaultModel(t.provider), t.provider)}`, {
-      message_thread_id: thread,
-    });
+    await replySilently(
+      ctx,
+      `🤖 model: ${modelLabel(model, defaultModel(t.provider), t.provider)}`,
+      { message_thread_id: thread },
+    );
   }
 }
 
@@ -183,16 +196,18 @@ async function applyProvider(
   announce = true,
 ): Promise<void> {
   if (!isLauncher(thread)) {
-    await ctx.reply("⚠️ an existing topic can't change agent — choose it in the launcher.", {
-      message_thread_id: thread,
-    });
+    await replySilently(
+      ctx,
+      "⚠️ an existing topic can't change agent — choose it in the launcher.",
+      { message_thread_id: thread },
+    );
     return;
   }
   nextProvider = provider;
   nextModel = undefined;
   nextEffort = undefined;
   if (announce) {
-    await ctx.reply(`🧠 next session agent: ${providerLabel(provider)}`, {
+    await replySilently(ctx, `🧠 next session agent: ${providerLabel(provider)}`, {
       message_thread_id: thread,
     });
   }
@@ -210,13 +225,13 @@ function shq(s: string): string {
 async function sessionTopic(ctx: any, thread: number | undefined): Promise<Topic | undefined> {
   const t = thread !== undefined && !isLauncher(thread) ? getTopic(thread) : undefined;
   if (!t) {
-    await ctx.reply("⚠️ run this inside a session topic, not here.", {
+    await replySilently(ctx, "⚠️ run this inside a session topic, not here.", {
       message_thread_id: thread,
     });
     return;
   }
   if (!t.session_id) {
-    await ctx.reply("⚠️ this topic has no session id yet — send a message first.", {
+    await replySilently(ctx, "⚠️ this topic has no session id yet — send a message first.", {
       message_thread_id: thread,
     });
     return;
@@ -245,7 +260,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
   if (cmd === "/id") {
     const t = await sessionTopic(ctx, thread);
     if (t) {
-      await ctx.reply(`\`${t.session_id}\``, {
+      await replySilently(ctx, `\`${t.session_id}\``, {
         message_thread_id: thread,
         parse_mode: "Markdown",
       });
@@ -260,7 +275,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
         t.provider === "codex"
           ? `codex resume ${t.session_id}`
           : `claude --resume ${t.session_id}`;
-      await ctx.reply(`\`\`\`\ncd ${shq(t.cwd)} && ${resume}\n\`\`\``, {
+      await replySilently(ctx, `\`\`\`\ncd ${shq(t.cwd)} && ${resume}\n\`\`\``, {
         message_thread_id: thread,
         parse_mode: "Markdown",
       });
@@ -273,7 +288,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
     if (arg) {
       const provider = parseProvider(arg);
       if (!provider) {
-        await ctx.reply("⚠️ unknown agent. Use `claude` or `codex`.", {
+        await replySilently(ctx, "⚠️ unknown agent. Use `claude` or `codex`.", {
           message_thread_id: thread,
           parse_mode: "Markdown",
         });
@@ -283,7 +298,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
       return true;
     }
     if (!isLauncher(thread)) {
-      await ctx.reply("⚠️ an existing topic can't change agent — choose it in the launcher.", {
+      await replySilently(ctx, "⚠️ an existing topic can't change agent — choose it in the launcher.", {
         message_thread_id: thread,
       });
       return true;
@@ -309,7 +324,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
     if (arg) {
       const value = isEffort ? parseEffort(arg, provider) : parseModel(arg, provider);
       if (value === undefined) {
-        await ctx.reply(isEffort ? effortUsage(provider) : modelUsage(provider), {
+        await replySilently(ctx, isEffort ? effortUsage(provider) : modelUsage(provider), {
           message_thread_id: thread,
         });
         return true;
@@ -354,12 +369,14 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
         stopped = await s.interrupt();
       } catch (err) {
         console.warn(`[stop] interrupting ${thread} failed:`, String(err));
-        await ctx.reply(`⚠️ couldn't stop it: ${String(err)}`, { message_thread_id: thread });
+        await replySilently(ctx, `⚠️ couldn't stop it: ${String(err)}`, {
+          message_thread_id: thread,
+        });
         return true;
       }
     }
     if (!stopped) {
-      await ctx.reply("⚠️ nothing running here.", { message_thread_id: thread });
+      await replySilently(ctx, "⚠️ nothing running here.", { message_thread_id: thread });
     }
     return true;
   }
@@ -373,7 +390,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
   const provider = t?.provider ?? nextProvider ?? cfg.provider;
   // Asking the provider for plan limits can take a few seconds (and may have
   // to start a child), so post the local tally first and fill the rest in.
-  const sent = await ctx.reply(`${local}\n\n⏳ _checking plan limits…_`, {
+  const sent = await replySilently(ctx, `${local}\n\n⏳ _checking plan limits…_`, {
     message_thread_id: thread,
     parse_mode: "Markdown",
   });
@@ -490,13 +507,16 @@ async function launch(
       .editMessageText(cfg.chatId, messageId, line)
       .then(() => true)
       .catch(() => false));
-  if (!posted) await ctx.reply(line, { message_thread_id: cfg.launcherThreadId });
+  if (!posted) {
+    await replySilently(ctx, line, { message_thread_id: cfg.launcherThreadId });
+  }
 
   // The launcher message lives in another topic — repeat it here so the
   // thread reads as a whole conversation.
   const echoText = () =>
     ctx.api.sendMessage(cfg.chatId, prompt, {
       message_thread_id: tid,
+      disable_notification: true,
       reply_markup: cancelTurnKeyboard(tid),
     });
   try {
@@ -509,6 +529,7 @@ async function launch(
         try {
           await ctx.api.copyMessage(cfg.chatId, cfg.chatId, source.message.message_id, {
             message_thread_id: tid,
+            disable_notification: true,
             ...(!copied ? { reply_markup: cancelTurnKeyboard(tid) } : {}),
           });
           copied = true;
@@ -540,11 +561,9 @@ async function route(
   if (isLauncher(thread)) {
     void launch(ctx, text, images, sources).catch(async (err) => {
       console.error("[launch] failed:", err);
-      await ctx
-        .reply(`❌ couldn't start that session: ${String(err)}`, {
-          message_thread_id: cfg.launcherThreadId,
-        })
-        .catch(() => {});
+      await replySilently(ctx, `❌ couldn't start that session: ${String(err)}`, {
+        message_thread_id: cfg.launcherThreadId,
+      }).catch(() => {});
     });
     return;
   }
@@ -597,11 +616,9 @@ async function contentFrom(ctx: any): Promise<AgentInput | null> {
     // got this far is a real message we can't read, and going quiet about it
     // is exactly how a message full of intent reaches nobody.
     if (isService(ctx.message)) return null;
-    await ctx
-      .reply("⚠️ I can't read that kind of message — try sending it as a file.", {
-        message_thread_id: thread,
-      })
-      .catch(() => {});
+    await replySilently(ctx, "⚠️ I can't read that kind of message — try sending it as a file.", {
+      message_thread_id: thread,
+    }).catch(() => {});
     return null;
   }
 
@@ -615,9 +632,9 @@ async function contentFrom(ctx: any): Promise<AgentInput | null> {
       image = await fetchImage(ctx.api, inbound.fileId, inbound.mime, inbound.uniqueId);
     } catch (err) {
       console.warn("[media] fetching the image failed:", String(err));
-      await ctx
-        .reply(`⚠️ couldn't fetch that image: ${String(err)}`, { message_thread_id: thread })
-        .catch(() => {});
+      await replySilently(ctx, `⚠️ couldn't fetch that image: ${String(err)}`, {
+        message_thread_id: thread,
+      }).catch(() => {});
       return null;
     }
     return contentOf(caption, [image]);
@@ -630,9 +647,9 @@ async function contentFrom(ctx: any): Promise<AgentInput | null> {
     file = await fetchDocument(ctx.api, inbound);
   } catch (err) {
     console.warn(`[media] fetching the ${inbound.kind} failed:`, String(err));
-    await ctx
-      .reply(`⚠️ couldn't fetch that ${inbound.kind}: ${String(err)}`, { message_thread_id: thread })
-      .catch(() => {});
+    await replySilently(ctx, `⚠️ couldn't fetch that ${inbound.kind}: ${String(err)}`, {
+      message_thread_id: thread,
+    }).catch(() => {});
     return null;
   }
   return contentOf(

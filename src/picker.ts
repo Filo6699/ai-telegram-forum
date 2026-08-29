@@ -127,6 +127,7 @@ export function askPick(
     void bot.api
       .sendMessage(cfg.chatId, text, {
         message_thread_id: opts.threadId,
+        disable_notification: true,
         parse_mode: "HTML",
         reply_markup: keyboard(id, groups, initial, opts.allowCancel ?? false),
       })
