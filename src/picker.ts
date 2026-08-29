@@ -46,7 +46,7 @@ export interface PickResult {
 }
 
 /** How long an untouched launch picker waits before the new session just starts. */
-export const LAUNCH_WAIT_MS = 5_000;
+export const LAUNCH_WAIT_MS = 12_000;
 
 /** How long a picker waits for the next press once the user has started choosing. */
 export const PICK_WAIT_MS = 60_000;
