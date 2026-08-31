@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { cfg } from "./config.ts";
 import type { Effort } from "./effort.ts";
 import type { Model } from "./model.ts";
+import type { ServiceTier } from "./preset-config.ts";
 import type { Provider } from "./provider.ts";
 
 export type TopicStatus = "active" | "closed";
@@ -19,6 +20,8 @@ export interface Topic {
   effort: Effort;
   /** null = no choice of ours; the session runs on the configured `MODEL`. */
   model: Model;
+  /** Codex throughput mode; null lets an adopted/existing session inherit its config. */
+  service_tier: ServiceTier;
   status: TopicStatus;
   last_activity: number;
   created_at: number;
@@ -46,6 +49,7 @@ db.exec(`
     title         TEXT NOT NULL,
     effort        TEXT,
     model         TEXT,
+    service_tier  TEXT,
     status        TEXT NOT NULL DEFAULT 'active',
     last_activity INTEGER NOT NULL,
     created_at    INTEGER NOT NULL,
@@ -64,6 +68,7 @@ for (const col of [
   "cost_usd REAL NOT NULL DEFAULT 0",
   "effort TEXT",
   "model TEXT",
+  "service_tier TEXT",
   "provider TEXT NOT NULL DEFAULT 'claude'",
 ]) {
   try {
@@ -77,8 +82,8 @@ const stmts = {
   get: db.prepare("SELECT * FROM topics WHERE thread_id = ?"),
   bySession: db.prepare("SELECT * FROM topics WHERE provider = ? AND session_id = ?"),
   insert: db.prepare(
-    `INSERT INTO topics (thread_id, session_id, provider, cwd, title, effort, model, status, last_activity, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+    `INSERT INTO topics (thread_id, session_id, provider, cwd, title, effort, model, service_tier, status, last_activity, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
   ),
   setEffort: db.prepare("UPDATE topics SET effort = ? WHERE thread_id = ?"),
   setModel: db.prepare("UPDATE topics SET model = ? WHERE thread_id = ?"),
@@ -126,6 +131,7 @@ export function createTopic(t: {
   provider?: Provider;
   effort?: Effort;
   model?: Model;
+  serviceTier?: ServiceTier;
   /** Set when adopting a session that already exists on disk (`/telegramify`). */
   sessionId?: string | null;
 }): void {
@@ -138,6 +144,7 @@ export function createTopic(t: {
     t.title,
     t.effort ?? null,
     t.model ?? null,
+    t.serviceTier ?? null,
     now,
     now,
   );

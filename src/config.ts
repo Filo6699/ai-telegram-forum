@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { parseCodexPresets, parseDefaultCodexPreset } from "./preset-config.ts";
 import { parseProvider } from "./provider.ts";
 
 function req(name: string): string {
@@ -41,6 +42,7 @@ const hours = (name: string, fallback: number) =>
 
 const provider = parseProvider(process.env.PROVIDER ?? "claude");
 if (!provider) throw new Error(`PROVIDER must be "claude" or "codex"`);
+const codexPresets = parseCodexPresets(process.env.CODEX_PRESETS);
 
 export const cfg = {
   token: req("BOT_TOKEN"),
@@ -56,6 +58,8 @@ export const cfg = {
   // default so one daemon can host topics from both providers.
   claudeModel: process.env.CLAUDE_MODEL ?? process.env.MODEL ?? "claude-opus-4-8",
   codexModel: process.env.CODEX_MODEL ?? "gpt-5.6-sol",
+  codexPresets,
+  codexDefaultPreset: parseDefaultCodexPreset(process.env.CODEX_DEFAULT_PRESET, codexPresets),
   // "auto": auto-approve the ALLOWED_TOOLS allowlist, deny everything else,
   // and block obviously destructive shell commands. "bypass": allow all tools.
   permission: (process.env.PERMISSION ?? "auto") as "auto" | "bypass",

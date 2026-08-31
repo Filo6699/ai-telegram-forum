@@ -11,6 +11,7 @@ import { cfg } from "./config.ts";
 import type { Effort } from "./effort.ts";
 import type { ImagePart } from "./media.ts";
 import type { Model } from "./model.ts";
+import type { ServiceTier } from "./preset-config.ts";
 import { TG_SYSTEM_PROMPT } from "./tg-tools.ts";
 
 export interface CodexInput {
@@ -44,10 +45,12 @@ export function createCodexThread(opts: {
   sessionId: string | null;
   effort: Effort;
   model: Model;
+  serviceTier: ServiceTier;
 }): Thread {
   const codex = new Codex({
     config: {
       developer_instructions: TG_SYSTEM_PROMPT,
+      ...(opts.serviceTier ? { service_tier: opts.serviceTier } : {}),
       mcp_servers: {
         tg: {
           command: process.execPath,

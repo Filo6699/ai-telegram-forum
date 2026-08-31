@@ -119,27 +119,33 @@ SDK and ChatGPT rate-limit windows through its local app-server. It does not
 report authoritative per-turn cost, so the bot does not invent one.
 
 **Model and reasoning effort.** Every new session opens with one provider-specific picker in the
-launcher — the models on top, then the supported effort levels, each
-row ticked on what's already in force — and the topic is only created once
-that's settled. One message and one wait for both. Ignore it and the
-session starts a few seconds later on exactly what's ticked: `CLAUDE_MODEL` or
-`CODEX_MODEL` from `.env` for the model, and for the effort no level at all — the bot keeps no
-default of its own, so nothing is passed and the CLI resolves it as usual. That
-Claude's tick is read from the same settings files the CLI reads; Codex's comes
-from `model_reasoning_effort` in `~/.codex/config.toml` when present. Touch a button and the launch waits for you: press
-buttons until you're happy, then **Confirm**, or just stop pressing and it goes
-with your last pick a minute later. **Cancel** aborts the launch before a topic
-or agent session is created. Once it's settled that same message turns
-into the launch line — `→ «title» (cwd: …) 🧠 Codex 🤖 GPT-5.6 Sol ⚙️ low` — so a launch is
-one message in the launcher, not a picker plus a note.
+launcher, and the topic is only created once that's settled. Claude shows its
+models and supported effort levels as separate rows. Codex shows one row of
+presets: each button selects a model, effort, and regular/fast service tier
+together. Configure the buttons with `CODEX_PRESETS` and the initial tick with
+`CODEX_DEFAULT_PRESET`. The example config provides **Flash** (Sol, low, fast),
+**Normal** (Sol, medium), and **Decent** (Sol, high), with Decent selected by
+default. `light` is accepted in the JSON as an alias for Codex's `low` effort.
+
+```dotenv
+CODEX_PRESETS={"Flash":{"model":"gpt-5.6-sol","effort":"low","fast":true},"Normal":{"model":"gpt-5.6-sol","effort":"medium"},"Decent":{"model":"gpt-5.6-sol","effort":"high"}}
+CODEX_DEFAULT_PRESET=Decent
+```
+
+Ignore the picker and the session starts a few seconds later on exactly what's
+ticked. Touch a button and the launch waits for you: press buttons until you're
+happy, then **Confirm**, or just stop pressing and it goes with your last pick
+a minute later. **Cancel** aborts the launch before a topic or agent session is
+created. Once settled, that same message turns into the launch line — a launch
+is one message in the launcher, not a picker plus a note.
 
 `/effort high` sets it without the buttons; `/effort` alone brings them up.
 `/effort default` hands the choice back to your settings.
 Inside a topic it applies to that topic from its next turn on — a turn already
 running finishes on the level it started with — and it's remembered, so the
 session comes back on it after an idle shutdown. In the launcher it applies to
-the *next* session only, once, and shows up pre-selected in that launch's
-picker. The level a turn ran
+the *next* session only, once. For Codex it appears as a pre-selected **Custom**
+choice beside the configured presets. The level a turn ran
 on appears in its summary line and in `/usage`.
 
 `/model` works the same way, one for one: Claude offers `opus`, `sonnet`,
@@ -148,8 +154,9 @@ on appears in its summary line and in `/usage`.
 provider's model in `.env` — which is what the
 tick sits on when nothing is picked, so the default is a button like any other.
 Inside a topic it swaps the model on the live session from the next turn on and
-is remembered across an idle shutdown; in the launcher it pre-selects the next
-launch's picker. The model a turn ran on is in its summary line and in `/usage`.
+is remembered across an idle shutdown; in the launcher it becomes the next
+Codex launch's **Custom** choice (or pre-selects Claude's model row). The model
+a turn ran on is in its summary line and in `/usage`.
 
 `/stop`, inside a topic, interrupts the turn running there — the running tool is
 aborted, any permission prompt still open is denied, and messages you sent while
@@ -291,6 +298,8 @@ message received during a Codex turn becomes the next turn automatically.
 | `src/install-command.ts` | install the `/telegramify` slash command |
 | `src/permission.ts` | tool approval prompts (inline buttons) |
 | `src/picker.ts` | the inline-button picker `/effort` and `/model` share |
+| `src/preset-config.ts` | Codex launch-preset config and service-tier types |
+| `src/preset.ts` | the Codex launch-preset picker |
 | `src/effort.ts` | reasoning-effort buttons and `/effort` |
 | `src/model.ts` | model buttons and `/model` |
 | `src/provider.ts` | Claude/Codex selection and `/provider` |

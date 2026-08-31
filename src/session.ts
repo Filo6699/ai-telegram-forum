@@ -12,6 +12,7 @@ import { isPendingTitle } from "./cwd.ts";
 import { addUsage, getTopic, setEffort, setModel, setSession, setTitle, touch } from "./db.ts";
 import { defaultEffort, effortLabel, type Effort } from "./effort.ts";
 import { defaultModel, modelLabel, type Model } from "./model.ts";
+import { serviceTierLabel, type ServiceTier } from "./preset-config.ts";
 import type { Provider } from "./provider.ts";
 import { fmtTokens, humanMs } from "./fmt.ts";
 import { clearPermissions, denyPending } from "./permission.ts";
@@ -44,6 +45,7 @@ export class TopicSession {
   private turnActive = false;
   private turnEffort: Effort = null;
   private turnModel: Model = null;
+  private turnServiceTier: ServiceTier = null;
   private closed = false;
 
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -56,6 +58,7 @@ export class TopicSession {
     readonly provider: Provider = "claude",
     private effortLevel: Effort = null,
     private modelId: Model = null,
+    private serviceTier: ServiceTier = null,
   ) {
     this.out = new TopicRenderer(bot.api, cfg.chatId, threadId);
     const channel = createTgChannel(this.out, cwd);
@@ -67,6 +70,7 @@ export class TopicSession {
       provider,
       effort: effortLevel,
       model: modelId,
+      serviceTier,
       channel,
       hooks: {
         beginTurn: () => this.beginTurn(),
@@ -130,6 +134,7 @@ export class TopicSession {
       sessionId: this.sessionId,
       effort: this.effortLevel,
       model: this.modelId,
+      serviceTier: this.serviceTier,
     });
   }
 
@@ -181,6 +186,7 @@ export class TopicSession {
     this.turnActive = true;
     this.turnEffort = this.effortLevel;
     this.turnModel = this.modelId;
+    this.turnServiceTier = this.serviceTier;
     this.out.clear();
     this.status = new TurnStatus(this.out);
     await this.status.start();
@@ -214,6 +220,7 @@ export class TopicSession {
         result.usage,
         effort,
         model,
+        this.provider === "codex" ? this.turnServiceTier : null,
         result.stopped,
       ),
     );
@@ -247,6 +254,7 @@ function summarize(
   usage: Usage,
   effort: string,
   model: string,
+  serviceTier: ServiceTier,
   stopped = false,
 ): string {
   const parts = [
@@ -255,6 +263,7 @@ function summarize(
     `🤖 ${model}`,
     `⚙️ ${effort}`,
   ];
+  if (serviceTier === "fast") parts.push(`🚀 ${serviceTierLabel(serviceTier)}`);
   if (status && status.toolCalls > 0) parts.push(`🔧 ${status.toolCalls}`);
   if (usage.inTokens || usage.outTokens) {
     parts.push(`${fmtTokens(usage.inTokens)}↑ ${fmtTokens(usage.outTokens)}↓`);
@@ -277,6 +286,7 @@ export function sessionFor(
     provider?: Provider;
     effort?: Effort;
     model?: Model;
+    service_tier?: ServiceTier;
   },
 ): TopicSession {
   const existing = live.get(topic.thread_id);
@@ -289,6 +299,7 @@ export function sessionFor(
     topic.provider ?? "claude",
     topic.effort ?? null,
     topic.model ?? null,
+    topic.service_tier ?? null,
   );
   live.set(topic.thread_id, s);
   return s;

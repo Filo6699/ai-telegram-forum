@@ -21,6 +21,7 @@ import type { Effort } from "./effort.ts";
 import type { ImagePart } from "./media.ts";
 import { defaultModel, type Model } from "./model.ts";
 import { clearPermissions } from "./permission.ts";
+import type { ServiceTier } from "./preset-config.ts";
 import type { Provider } from "./provider.ts";
 import { TG_SEND_TOOL, type TgChannel } from "./tg-tools.ts";
 
@@ -33,6 +34,7 @@ export interface AgentSettings {
   sessionId: string | null;
   effort: Effort;
   model: Model;
+  serviceTier: ServiceTier;
 }
 
 export interface AgentTurnResult {
@@ -119,6 +121,7 @@ class ClaudeAgentSession implements AgentSession {
       sessionId: opts.sessionId,
       effort: opts.effort,
       model: opts.model,
+      serviceTier: opts.serviceTier,
     };
   }
 
@@ -294,6 +297,7 @@ class CodexAgentSession implements AgentSession {
       sessionId: opts.sessionId,
       effort: opts.effort,
       model: opts.model,
+      serviceTier: opts.serviceTier,
     };
   }
 
@@ -334,6 +338,7 @@ class CodexAgentSession implements AgentSession {
       sessionId: this.settings.sessionId,
       effort: this.settings.effort,
       model: this.settings.model,
+      serviceTier: this.settings.serviceTier,
     });
   }
 

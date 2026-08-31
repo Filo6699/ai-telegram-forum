@@ -30,6 +30,8 @@ import {
   type Model,
 } from "./model.ts";
 import { askPick, LAUNCH_WAIT_MS, registerPickerButtons } from "./picker.ts";
+import { codexPresetPicker } from "./preset.ts";
+import { serviceTierLabel, type ServiceTier } from "./preset-config.ts";
 import { fmtTokens } from "./fmt.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { fetchPlanLimits, planLimitsText } from "./limits.ts";
@@ -76,6 +78,7 @@ function topicUsageText(t: Topic): string {
     `agent: ${providerLabel(t.provider)}\n` +
     `model: ${modelLabel(t.model, defaultModel(t.provider), t.provider)}\n` +
     `effort: ${effortLabel(t.effort, defaultEffort(t.cwd, t.provider))}\n` +
+    (t.provider === "codex" ? `mode: ${serviceTierLabel(t.service_tier)}\n` : "") +
     `tokens: ${fmt(t.in_tokens)} in / ${fmt(t.out_tokens)} out\n` +
     `cost: $${t.cost_usd.toFixed(4)}`
   );
@@ -84,12 +87,15 @@ function topicUsageText(t: Topic): string {
 function totalsText(): string {
   const s = totals();
   const provider = nextProvider ?? cfg.provider;
+  const preset = provider === "codex" ? codexPresetPicker(nextModel, nextEffort).selected(null) : null;
   return (
     `📊 *All topics*\n` +
     `topics: ${s.topics} · turns: ${s.turns}\n` +
     `next session agent: ${providerLabel(provider)}\n` +
-    `next session model: ${modelLabel(nextModel ?? null, defaultModel(provider), provider)}\n` +
-    `next session effort: ${effortLabel(nextEffort ?? null, defaultEffort(cfg.defaultCwd, provider))}\n` +
+    (preset ? `next session preset: ${preset.name}\n` : "") +
+    `next session model: ${modelLabel(preset?.model ?? nextModel ?? null, defaultModel(provider), provider)}\n` +
+    `next session effort: ${effortLabel(preset?.effort ?? nextEffort ?? null, defaultEffort(cfg.defaultCwd, provider))}\n` +
+    (preset ? `next session mode: ${serviceTierLabel(preset.serviceTier)}\n` : "") +
     `tokens: ${fmt(s.in_tokens)} in / ${fmt(s.out_tokens)} out\n` +
     `cost: $${s.cost_usd.toFixed(4)}`
   );
@@ -472,27 +478,30 @@ async function launch(
   // topic created. An untouched picker falls through in seconds, so a launch
   // nobody answers still starts, but once the user reaches for a button the
   // launch waits for them to finish.
+  const presetPicker =
+    provider === "codex" ? codexPresetPicker(nextModel, nextEffort) : undefined;
   const { picks, cancelled, messageId } = await askPick(bot, {
     threadId: cfg.launcherThreadId,
     title: `«${title}»`,
-    groups: [
-      modelGroup(nextModel ?? null, provider),
-      effortGroup(nextEffort ?? null, cwd, provider),
-    ],
+    groups: presetPicker
+      ? [presetPicker.group]
+      : [modelGroup(nextModel ?? null, provider), effortGroup(nextEffort ?? null, cwd, provider)],
     firstWaitMs: LAUNCH_WAIT_MS,
     rewritten: true,
     allowCancel: true,
   });
   if (cancelled) return;
-  const effort = asEffort(picks.e ?? null, provider);
-  const model = asModel(picks.m ?? null);
+  const preset = presetPicker?.selected(picks.r ?? null);
+  const effort = preset?.effort ?? asEffort(picks.e ?? null, provider);
+  const model = preset?.model ?? asModel(picks.m ?? null);
+  const serviceTier: ServiceTier = preset?.serviceTier ?? null;
   nextEffort = undefined;
   nextModel = undefined;
   nextProvider = undefined;
 
   const topic = await ctx.api.createForumTopic(cfg.chatId, title);
   const tid = topic.message_thread_id;
-  createTopic({ threadId: tid, cwd, title, provider, effort, model });
+  createTopic({ threadId: tid, cwd, title, provider, effort, model, serviceTier });
 
   // The picker becomes the launch line: one message for one launch, rather than
   // the settled picker and a "→ …" note sitting one above the other.
@@ -500,7 +509,8 @@ async function launch(
     `→ «${title}»  (cwd: ${cwd})` +
     `  🧠 ${providerLabel(provider)}` +
     `  🤖 ${modelLabel(model, defaultModel(provider), provider)}` +
-    `  ⚙️ ${effortLabel(effort, defaultEffort(cwd, provider))}`;
+    `  ⚙️ ${effortLabel(effort, defaultEffort(cwd, provider))}` +
+    (preset ? `  🎛️ ${preset.name}  🚀 ${serviceTierLabel(serviceTier)}` : "");
   const posted =
     messageId !== null &&
     (await ctx.api
@@ -543,9 +553,15 @@ async function launch(
     console.warn(`[launch] echoing the prompt into ${tid} failed:`, String(err));
   }
 
-  await sessionFor(bot, { thread_id: tid, cwd, session_id: null, provider, effort, model }).send(
-    contentOf(prompt, images),
-  );
+  await sessionFor(bot, {
+    thread_id: tid,
+    cwd,
+    session_id: null,
+    provider,
+    effort,
+    model,
+    service_tier: serviceTier,
+  }).send(contentOf(prompt, images));
 }
 
 /** Route one inbound user message (with any images already downloaded). */
