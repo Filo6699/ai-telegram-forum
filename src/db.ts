@@ -87,6 +87,9 @@ const stmts = {
   ),
   setEffort: db.prepare("UPDATE topics SET effort = ? WHERE thread_id = ?"),
   setModel: db.prepare("UPDATE topics SET model = ? WHERE thread_id = ?"),
+  setCodexSettings: db.prepare(
+    "UPDATE topics SET model = ?, effort = ?, service_tier = ? WHERE thread_id = ?",
+  ),
   setSession: db.prepare(
     "UPDATE topics SET session_id = ?, last_activity = ? WHERE thread_id = ?",
   ),
@@ -156,6 +159,16 @@ export function setEffort(threadId: number, effort: Effort): void {
 
 export function setModel(threadId: number, model: Model): void {
   stmts.setModel.run(model, threadId);
+}
+
+/** Apply a configured Codex preset as one persisted settings change. */
+export function setCodexSettings(
+  threadId: number,
+  model: Model,
+  effort: Effort,
+  serviceTier: ServiceTier,
+): void {
+  stmts.setCodexSettings.run(model, effort, serviceTier, threadId);
 }
 
 export function setSession(threadId: number, sessionId: string): void {

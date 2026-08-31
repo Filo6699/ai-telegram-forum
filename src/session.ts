@@ -10,7 +10,16 @@ import {
 import { cfg } from "./config.ts";
 import { codexSummaryParts } from "./codex-summary.ts";
 import { isPendingTitle } from "./cwd.ts";
-import { addUsage, getTopic, setEffort, setModel, setSession, setTitle, touch } from "./db.ts";
+import {
+  addUsage,
+  getTopic,
+  setCodexSettings,
+  setEffort,
+  setModel,
+  setSession,
+  setTitle,
+  touch,
+} from "./db.ts";
 import { defaultEffort, effortLabel, type Effort } from "./effort.ts";
 import { defaultModel, modelLabel, type Model } from "./model.ts";
 import { codexPresetName } from "./preset.ts";
@@ -123,6 +132,19 @@ export class TopicSession {
   setModel(model: Model): void {
     this.modelId = model;
     setModel(this.threadId, model);
+    if (this.turnActive) {
+      this.settingsDirty = true;
+      return;
+    }
+    void this.applySettings();
+  }
+
+  /** Change the complete Codex preset without exposing an intermediate state. */
+  setCodexSettings(model: Model, effort: Effort, serviceTier: ServiceTier): void {
+    this.modelId = model;
+    this.effortLevel = effort;
+    this.serviceTier = serviceTier;
+    setCodexSettings(this.threadId, model, effort, serviceTier);
     if (this.turnActive) {
       this.settingsDirty = true;
       return;

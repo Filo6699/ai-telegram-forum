@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { cfg } from "../src/config.ts";
 import { compactCodexLimits } from "../src/codex-summary.ts";
 import { parseCodexSessionUsage } from "../src/codex-session-usage.ts";
 import { compactMs, fmtTokens } from "../src/fmt.ts";
-import { codexPresetName } from "../src/preset.ts";
+import { codexModelPicker, codexPresetName } from "../src/preset.ts";
 
 test("native Codex usage reports cumulative session tokens and context occupancy", () => {
   const line = JSON.stringify({
@@ -56,6 +57,15 @@ test("an exact Codex setting tuple collapses to its preset name", () => {
     "Decent",
   );
   assert.equal(codexPresetName("gpt-5.6-sol", "low", "default", []), null);
+});
+
+test("Codex model picker exposes and selects configured presets", () => {
+  const preset = cfg.codexPresets[0]!;
+  const picker = codexModelPicker(preset.model, preset.effort, preset.serviceTier);
+
+  assert.equal(picker.group.initial, "preset:0");
+  assert.deepEqual(picker.selected(null), { kind: "preset", preset });
+  assert.ok(picker.group.options.some((option) => option.label === `🎛️ ${preset.name}`));
 });
 
 test("summary durations use clock notation after one minute", () => {

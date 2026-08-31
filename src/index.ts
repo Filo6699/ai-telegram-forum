@@ -30,7 +30,11 @@ import {
   type Model,
 } from "./model.ts";
 import { askPick, LAUNCH_WAIT_MS, registerPickerButtons } from "./picker.ts";
-import { codexPresetPicker } from "./preset.ts";
+import {
+  codexModelPicker,
+  codexPresetPicker,
+  type CodexPresetChoice,
+} from "./preset.ts";
 import { serviceTierLabel, type ServiceTier } from "./preset-config.ts";
 import { fmtTokens } from "./fmt.ts";
 import { startHeartbeat } from "./heartbeat.ts";
@@ -49,6 +53,7 @@ import { startSweep } from "./sweep.ts";
 import {
   createTopic,
   getTopic,
+  setCodexSettings,
   setEffort,
   setModel,
   setStatus,
@@ -87,7 +92,10 @@ function topicUsageText(t: Topic): string {
 function totalsText(): string {
   const s = totals();
   const provider = nextProvider ?? cfg.provider;
-  const preset = provider === "codex" ? codexPresetPicker(nextModel, nextEffort).selected(null) : null;
+  const preset =
+    provider === "codex"
+      ? codexPresetPicker(nextModel, nextEffort, nextServiceTier).selected(null)
+      : null;
   return (
     `📊 *All topics*\n` +
     `topics: ${s.topics} · turns: ${s.turns}\n` +
@@ -108,6 +116,7 @@ function totalsText(): string {
  */
 let nextEffort: Effort | undefined;
 let nextModel: Model | undefined;
+let nextServiceTier: ServiceTier | undefined;
 let nextProvider: Provider | undefined;
 
 /**
@@ -193,6 +202,25 @@ async function applyModel(
   }
 }
 
+/** Apply all settings represented by one configured Codex preset. */
+async function applyCodexPreset(
+  ctx: any,
+  thread: number | undefined,
+  preset: CodexPresetChoice,
+): Promise<void> {
+  const t = await target(ctx, thread);
+  if (t === undefined) return;
+  if (t === null) {
+    nextModel = preset.model;
+    nextEffort = preset.effort;
+    nextServiceTier = preset.serviceTier;
+    return;
+  }
+  const s = liveSession(t.thread_id);
+  if (s) s.setCodexSettings(preset.model, preset.effort, preset.serviceTier);
+  else setCodexSettings(t.thread_id, preset.model, preset.effort, preset.serviceTier);
+}
+
 /** Provider is chosen before a topic exists; changing it would switch session
  * stores and cannot preserve history, so established topics keep theirs. */
 async function applyProvider(
@@ -212,6 +240,7 @@ async function applyProvider(
   nextProvider = provider;
   nextModel = undefined;
   nextEffort = undefined;
+  nextServiceTier = undefined;
   if (announce) {
     await replySilently(ctx, `🧠 next session agent: ${providerLabel(provider)}`, {
       message_thread_id: thread,
@@ -345,6 +374,18 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
     const inLauncher = isLauncher(thread);
     const where = inLauncher ? "the next session" : "this topic";
     const cwd = topic?.cwd ?? cfg.defaultCwd;
+    const nextCodex =
+      !isEffort && provider === "codex" && inLauncher
+        ? codexPresetPicker(nextModel, nextEffort, nextServiceTier).selected(null)
+        : undefined;
+    const codexModels =
+      !isEffort && provider === "codex"
+        ? codexModelPicker(
+            nextCodex?.model ?? topic?.model ?? null,
+            nextCodex?.effort ?? topic?.effort ?? null,
+            nextCodex?.serviceTier ?? topic?.service_tier ?? null,
+          )
+        : undefined;
     void askPick(bot, {
       threadId: thread,
       title: `${isEffort ? "effort" : "model"} for ${where}`,
@@ -356,13 +397,18 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
               provider,
             ),
           ]
-        : [modelGroup(inLauncher ? (nextModel ?? null) : (topic?.model ?? null), provider)],
+        : [
+            codexModels?.group ??
+              modelGroup(inLauncher ? (nextModel ?? null) : (topic?.model ?? null), provider),
+          ],
     })
-      .then(({ picks }) =>
-        isEffort
-          ? applyEffort(ctx, thread, asEffort(picks.e ?? null, provider), false)
-          : applyModel(ctx, thread, asModel(picks.m ?? null), false),
-      )
+      .then(({ picks }) => {
+        if (isEffort) return applyEffort(ctx, thread, asEffort(picks.e ?? null, provider), false);
+        const choice = codexModels?.selected(picks.m ?? null);
+        return choice?.kind === "preset"
+          ? applyCodexPreset(ctx, thread, choice.preset)
+          : applyModel(ctx, thread, choice?.model ?? asModel(picks.m ?? null), false);
+      })
       .catch((err) => console.warn(`[${cmd}] applying the picked value failed:`, String(err)));
     return true;
   }
@@ -479,7 +525,9 @@ async function launch(
   // nobody answers still starts, but once the user reaches for a button the
   // launch waits for them to finish.
   const presetPicker =
-    provider === "codex" ? codexPresetPicker(nextModel, nextEffort) : undefined;
+    provider === "codex"
+      ? codexPresetPicker(nextModel, nextEffort, nextServiceTier)
+      : undefined;
   const { picks, cancelled, messageId } = await askPick(bot, {
     threadId: cfg.launcherThreadId,
     title: `«${title}»`,
@@ -497,6 +545,7 @@ async function launch(
   const serviceTier: ServiceTier = preset?.serviceTier ?? null;
   nextEffort = undefined;
   nextModel = undefined;
+  nextServiceTier = undefined;
   nextProvider = undefined;
 
   const topic = await ctx.api.createForumTopic(cfg.chatId, title);
