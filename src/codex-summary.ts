@@ -17,7 +17,7 @@ export async function codexSummaryParts(
   const parts: string[] = [];
   parts.push(`Σ${fmtTokens(usage?.totalTokens ?? fallbackTopicTokens)}`);
   if (usage?.estimatedWeeklyPercent !== null && usage?.estimatedWeeklyPercent !== undefined) {
-    parts.push(`⏳≈${formatCodexWeeklyPercent(usage.estimatedWeeklyPercent)}`);
+    parts.push(`🧠≈${formatCodexWeeklyPercent(usage.estimatedWeeklyPercent)}`);
   }
   return parts;
 }
