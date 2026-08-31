@@ -241,13 +241,9 @@ export class TopicSession {
 
     addUsage(this.threadId, result.usage);
     if (this.sessionId) setSession(this.threadId, this.sessionId);
-    const topic = getTopic(this.threadId);
     const extra =
       this.provider === "codex"
-        ? await codexSummaryParts(
-            this.sessionId,
-            (topic?.in_tokens ?? 0) + (topic?.out_tokens ?? 0),
-          )
+        ? await codexSummaryParts(this.sessionId)
         : [];
     await status?.finish(
       summarize(
@@ -311,7 +307,7 @@ function summarize(
     parts.push(`🚀 ${serviceTierLabel(serviceTier)}`);
   }
   if (status && status.toolCalls > 0) {
-    parts.push(provider === "codex" ? `🔧${status.toolCalls}` : `🔧 ${status.toolCalls}`);
+    parts.push(`🔧 ${status.toolCalls}`);
   }
   if (provider !== "codex" && (usage.inTokens || usage.outTokens)) {
     parts.push(`${fmtTokens(usage.inTokens)}↑ ${fmtTokens(usage.outTokens)}↓`);

@@ -117,16 +117,16 @@ Code activity, not just this bot; on an API-key or Bedrock/Vertex setup there
 are no plan limits and that part is left out. Codex reports tokens through its
 SDK and ChatGPT rate-limit windows through its local app-server. It does not
 report authoritative per-turn cost, so the bot does not invent one.
-At the end of each Codex turn, its compact summary instead shows the preset,
-native session's cumulative tokens, and an estimated share of the weekly
-allowance spent by that session (`✅ 1:39 · Decent · 🔧4 · Σ4.8m · 🧠≈0.8%`).
+At the end of each Codex turn, its compact summary instead shows the preset and
+an estimated share of the weekly allowance spent by that native session
+(`✅ 1:39 · Decent · 🔧 4 · 🧠 0.8%`).
 The estimate weights new input, cached input, and output using OpenAI's Codex
 credit rates, including the fast-mode multiplier, against a locally calibrated
 weekly capacity. It is deliberately marked approximate because ChatGPT does
 not publish that capacity. Native usage is read after the turn, so it never
-consumes a model request; if it is unavailable, that field is simply omitted
-(with the topic's locally counted tokens as the session-total fallback). Exact
-shared-account windows and reset times remain available under `/usage`.
+consumes a model request; if it is unavailable, that field is simply omitted.
+Exact shared-account windows, token totals, and reset times remain available
+under `/usage`.
 
 **Model and reasoning effort.** Every new session opens with one provider-specific picker in the
 launcher, and the topic is only created once that's settled. Claude shows its
