@@ -117,6 +117,12 @@ Code activity, not just this bot; on an API-key or Bedrock/Vertex setup there
 are no plan limits and that part is left out. Codex reports tokens through its
 SDK and ChatGPT rate-limit windows through its local app-server. It does not
 report authoritative per-turn cost, so the bot does not invent one.
+At the end of each Codex turn, its compact summary instead shows the native
+session's cumulative tokens and current context fill, followed by the shared
+Codex account window (`⏳ week 4% ↻ 6d 21h`). These are read after the turn, so
+they never consume a model request; if either source is unavailable, that field
+is simply omitted (with the topic's locally counted tokens as the session-total
+fallback).
 
 **Model and reasoning effort.** Every new session opens with one provider-specific picker in the
 launcher, and the topic is only created once that's settled. Claude shows its
@@ -327,7 +333,7 @@ message received during a Codex turn becomes the next turn automatically.
   images, tool status, token usage, and the direct `send`/file tool do work.
 - The agent decides when to write, through its `send` tool. A long turn isn't
   silent — a live status line tracks tool activity and ends as a summary
-  (duration, tool calls, tokens, cost) — but there is no token-by-token
+  (duration, tool calls, and provider-specific usage) — but there is no token-by-token
   streaming of the reply itself.
 - Bots can't create groups — the forum itself is created by you, once.
 

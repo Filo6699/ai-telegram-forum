@@ -95,8 +95,10 @@ export function readCodexUsage(usage: CodexUsage): {
   costUsd: number;
 } {
   return {
-    inTokens:
-      usage.input_tokens + usage.cached_input_tokens + (usage.cache_write_input_tokens ?? 0),
+    // Cached reads and cache writes are detail fields within input_tokens, not
+    // extra input. Adding them again makes long, cache-heavy turns look nearly
+    // twice as large as Codex reports them.
+    inTokens: usage.input_tokens,
     outTokens: usage.output_tokens,
     // The CLI reports token counts but not price/cost. Keep accounting honest
     // instead of estimating against a pricing table that can change.

@@ -29,5 +29,6 @@ export function bar(pct: number | null, width = 12): string {
 
 /** Compact token count: `812`, `12.3k`. */
 export function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }

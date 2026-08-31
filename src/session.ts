@@ -8,6 +8,7 @@ import {
   type AgentTurnResult,
 } from "./agent-session.ts";
 import { cfg } from "./config.ts";
+import { codexSummaryParts } from "./codex-summary.ts";
 import { isPendingTitle } from "./cwd.ts";
 import { addUsage, getTopic, setEffort, setModel, setSession, setTitle, touch } from "./db.ts";
 import { defaultEffort, effortLabel, type Effort } from "./effort.ts";
@@ -213,6 +214,14 @@ export class TopicSession {
 
     addUsage(this.threadId, result.usage);
     if (this.sessionId) setSession(this.threadId, this.sessionId);
+    const topic = getTopic(this.threadId);
+    const extra =
+      this.provider === "codex"
+        ? await codexSummaryParts(
+            this.sessionId,
+            (topic?.in_tokens ?? 0) + (topic?.out_tokens ?? 0),
+          )
+        : [];
     await status?.finish(
       summarize(
         result.ok && !result.failure,
@@ -222,6 +231,8 @@ export class TopicSession {
         model,
         this.provider === "codex" ? this.turnServiceTier : null,
         result.stopped,
+        extra,
+        this.provider,
       ),
     );
     await this.retitle();
@@ -256,6 +267,8 @@ function summarize(
   model: string,
   serviceTier: ServiceTier,
   stopped = false,
+  extra: string[] = [],
+  provider: Provider = "claude",
 ): string {
   const parts = [
     stopped ? "⏹" : ok ? "✅" : "⚠️",
@@ -265,10 +278,11 @@ function summarize(
   ];
   if (serviceTier === "fast") parts.push(`🚀 ${serviceTierLabel(serviceTier)}`);
   if (status && status.toolCalls > 0) parts.push(`🔧 ${status.toolCalls}`);
-  if (usage.inTokens || usage.outTokens) {
+  if (provider !== "codex" && (usage.inTokens || usage.outTokens)) {
     parts.push(`${fmtTokens(usage.inTokens)}↑ ${fmtTokens(usage.outTokens)}↓`);
   }
-  if (usage.costUsd > 0) parts.push(`$${usage.costUsd.toFixed(4)}`);
+  if (provider !== "codex" && usage.costUsd > 0) parts.push(`$${usage.costUsd.toFixed(4)}`);
+  parts.push(...extra);
   return parts.join(" · ");
 }
 
