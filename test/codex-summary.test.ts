@@ -1,52 +1,72 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { cfg } from "../src/config.ts";
-import { compactCodexLimits } from "../src/codex-summary.ts";
+import {
+  estimateCodexCredits,
+  estimateCodexWeeklyPercent,
+  formatCodexWeeklyPercent,
+} from "../src/codex-quota.ts";
 import { parseCodexSessionUsage } from "../src/codex-session-usage.ts";
 import { compactMs, fmtTokens } from "../src/fmt.ts";
 import { codexModelPicker, codexPresetName } from "../src/preset.ts";
 
-test("native Codex usage reports cumulative session tokens and context occupancy", () => {
-  const line = JSON.stringify({
-    type: "event_msg",
-    payload: {
-      type: "token_count",
-      info: {
-        total_token_usage: { total_tokens: 11_088_400 },
-        last_token_usage: { total_tokens: 135_200 },
-        model_context_window: 258_400,
-      },
-    },
-  });
-  assert.deepEqual(parseCodexSessionUsage(`junk\n${line}\n`), {
-    totalTokens: 11_088_400,
-    contextUsedPercent: 50,
-  });
-});
-
-test("compact limits includes only the shared Codex bucket", () => {
-  const reset = new Date(Date.now() + 90 * 60_000).toISOString();
-  const text = compactCodexLimits({
-    subscription: "prolite",
-    windows: [
-      { label: "Codex (week)", utilization: 2, resetsAt: reset },
-      { label: "GPT-5.3-Codex-Spark (5h)", utilization: 10, resetsAt: reset },
-    ],
-  });
-  assert.equal(text, "2%");
-});
-
-test("compact limits shows the most-consumed shared window", () => {
-  assert.equal(
-    compactCodexLimits({
-      subscription: null,
-      windows: [
-        { label: "Codex (5h)", utilization: 17, resetsAt: null },
-        { label: "Codex (week)", utilization: 4, resetsAt: null },
-      ],
+test("native Codex usage aggregates every response and estimates weekly session spend", () => {
+  const lines = [
+    JSON.stringify({
+      type: "turn_context",
+      payload: { model: "gpt-5.6-sol", service_tier: null },
     }),
-    "17%",
-  );
+    JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: { total_tokens: 1_100_000 },
+          last_token_usage: {
+            input_tokens: 1_000_000,
+            cached_input_tokens: 800_000,
+            output_tokens: 100_000,
+            total_tokens: 1_100_000,
+          },
+          model_context_window: 258_400,
+        },
+      },
+    }),
+    JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: { total_tokens: 2_300_000 },
+          last_token_usage: {
+            input_tokens: 1_800_000,
+            cached_input_tokens: 1_500_000,
+            output_tokens: 200_000,
+            total_tokens: 2_000_000,
+          },
+          model_context_window: 258_400,
+        },
+      },
+    }),
+  ];
+  const usage = parseCodexSessionUsage(`junk\n${lines.join("\n")}\n`);
+  assert.ok(usage);
+  assert.equal(usage.totalTokens, 3_100_000);
+  assert.equal(usage.contextUsedPercent, 100);
+  assert.ok(Math.abs(usage.estimatedWeeklyPercent! - 2.477777) < 0.000001);
+});
+
+test("Codex quota credits discount cached input and apply fast mode", () => {
+  const usage = {
+    input_tokens: 1_000_000,
+    cached_input_tokens: 800_000,
+    output_tokens: 100_000,
+  };
+  assert.equal(estimateCodexCredits(usage, "gpt-5.6-sol", null), 78);
+  assert.equal(estimateCodexCredits(usage, "gpt-5.6-sol", "fast"), 195);
+  assert.equal(estimateCodexWeeklyPercent(90), 1);
+  assert.equal(formatCodexWeeklyPercent(0.824), "0.8%");
+  assert.equal(formatCodexWeeklyPercent(0.01), "<0.1%");
 });
 
 test("an exact Codex setting tuple collapses to its preset name", () => {
