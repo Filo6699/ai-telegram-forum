@@ -17,6 +17,24 @@ export interface CodexPresetChoice {
   serviceTier: ServiceTier;
 }
 
+/** The configured preset represented by an exact set of turn settings. */
+export function codexPresetName(
+  model: Model,
+  effort: Effort,
+  serviceTier: ServiceTier,
+  presets: CodexPresetConfig[] = cfg.codexPresets,
+): string | null {
+  if (!model || !effort || !serviceTier) return null;
+  return (
+    presets.find(
+      (preset) =>
+        preset.model === model &&
+        preset.effort === effort &&
+        preset.serviceTier === serviceTier,
+    )?.name ?? null
+  );
+}
+
 const presetSummary = (preset: CodexPresetChoice): string =>
   `🎛️ preset: ${preset.name} · 🤖 ${modelLabel(preset.model, cfg.codexModel, "codex")} · ` +
   `⚙️ ${effortLabel(preset.effort)} · 🚀 ${serviceTierLabel(preset.serviceTier)}`;

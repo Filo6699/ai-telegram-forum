@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { compactCodexLimits } from "../src/codex-summary.ts";
 import { parseCodexSessionUsage } from "../src/codex-session-usage.ts";
-import { fmtTokens } from "../src/fmt.ts";
+import { compactMs, fmtTokens } from "../src/fmt.ts";
+import { codexPresetName } from "../src/preset.ts";
 
 test("native Codex usage reports cumulative session tokens and context occupancy", () => {
   const line = JSON.stringify({
@@ -31,8 +32,35 @@ test("compact limits includes only the shared Codex bucket", () => {
       { label: "GPT-5.3-Codex-Spark (5h)", utilization: 10, resetsAt: reset },
     ],
   });
-  assert.match(text!, /^week 2% ↻ 1h 29m|^week 2% ↻ 1h 30m/);
-  assert.doesNotMatch(text!, /Spark/);
+  assert.equal(text, "2%");
+});
+
+test("compact limits shows the most-consumed shared window", () => {
+  assert.equal(
+    compactCodexLimits({
+      subscription: null,
+      windows: [
+        { label: "Codex (5h)", utilization: 17, resetsAt: null },
+        { label: "Codex (week)", utilization: 4, resetsAt: null },
+      ],
+    }),
+    "17%",
+  );
+});
+
+test("an exact Codex setting tuple collapses to its preset name", () => {
+  assert.equal(
+    codexPresetName("gpt-5.6-sol", "high", "default", [
+      { name: "Decent", model: "gpt-5.6-sol", effort: "high", serviceTier: "default" },
+    ]),
+    "Decent",
+  );
+  assert.equal(codexPresetName("gpt-5.6-sol", "low", "default", []), null);
+});
+
+test("summary durations use clock notation after one minute", () => {
+  assert.equal(compactMs(47_000), "47s");
+  assert.equal(compactMs(99_000), "1:39");
 });
 
 test("large token counts use millions instead of thousands", () => {

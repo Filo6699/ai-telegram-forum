@@ -117,9 +117,9 @@ Code activity, not just this bot; on an API-key or Bedrock/Vertex setup there
 are no plan limits and that part is left out. Codex reports tokens through its
 SDK and ChatGPT rate-limit windows through its local app-server. It does not
 report authoritative per-turn cost, so the bot does not invent one.
-At the end of each Codex turn, its compact summary instead shows the native
-session's cumulative tokens and current context fill, followed by the shared
-Codex account window (`⏳ week 4% ↻ 6d 21h`). These are read after the turn, so
+At the end of each Codex turn, its compact summary instead shows the preset,
+native session's cumulative tokens, and the most-consumed shared Codex account
+window (`✅ 1:39 · Decent · 🔧4 · Σ4.8m · ⏳2%`). These are read after the turn, so
 they never consume a model request; if either source is unavailable, that field
 is simply omitted (with the topic's locally counted tokens as the session-total
 fallback).

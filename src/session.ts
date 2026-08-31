@@ -13,9 +13,10 @@ import { isPendingTitle } from "./cwd.ts";
 import { addUsage, getTopic, setEffort, setModel, setSession, setTitle, touch } from "./db.ts";
 import { defaultEffort, effortLabel, type Effort } from "./effort.ts";
 import { defaultModel, modelLabel, type Model } from "./model.ts";
+import { codexPresetName } from "./preset.ts";
 import { serviceTierLabel, type ServiceTier } from "./preset-config.ts";
 import type { Provider } from "./provider.ts";
-import { fmtTokens, humanMs } from "./fmt.ts";
+import { compactMs, fmtTokens, humanMs } from "./fmt.ts";
 import { clearPermissions, denyPending } from "./permission.ts";
 import { TopicRenderer } from "./render.ts";
 import { TurnStatus } from "./status.ts";
@@ -203,6 +204,10 @@ export class TopicSession {
       undefined,
       this.provider,
     );
+    const preset =
+      this.provider === "codex"
+        ? codexPresetName(this.turnModel, this.turnEffort, this.turnServiceTier)
+        : null;
     this.status = null;
     this.turnActive = false;
 
@@ -233,6 +238,7 @@ export class TopicSession {
         result.stopped,
         extra,
         this.provider,
+        preset,
       ),
     );
     await this.retitle();
@@ -269,15 +275,22 @@ function summarize(
   stopped = false,
   extra: string[] = [],
   provider: Provider = "claude",
+  preset: string | null = null,
 ): string {
-  const parts = [
-    stopped ? "⏹" : ok ? "✅" : "⚠️",
-    humanMs(status?.elapsedMs ?? 0),
-    `🤖 ${model}`,
-    `⚙️ ${effort}`,
-  ];
-  if (serviceTier === "fast") parts.push(`🚀 ${serviceTierLabel(serviceTier)}`);
-  if (status && status.toolCalls > 0) parts.push(`🔧 ${status.toolCalls}`);
+  const marker = stopped ? "⏹" : ok ? "✅" : "⚠️";
+  const parts =
+    provider === "codex"
+      ? [
+          `${marker} ${compactMs(status?.elapsedMs ?? 0)}`,
+          preset ?? `${model}/${effort}${serviceTier === "fast" ? "/fast" : ""}`,
+        ]
+      : [marker, humanMs(status?.elapsedMs ?? 0), `🤖 ${model}`, `⚙️ ${effort}`];
+  if (provider !== "codex" && serviceTier === "fast") {
+    parts.push(`🚀 ${serviceTierLabel(serviceTier)}`);
+  }
+  if (status && status.toolCalls > 0) {
+    parts.push(provider === "codex" ? `🔧${status.toolCalls}` : `🔧 ${status.toolCalls}`);
+  }
   if (provider !== "codex" && (usage.inTokens || usage.outTokens)) {
     parts.push(`${fmtTokens(usage.inTokens)}↑ ${fmtTokens(usage.outTokens)}↓`);
   }

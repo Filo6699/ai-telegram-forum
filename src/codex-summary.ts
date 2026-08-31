@@ -1,21 +1,19 @@
 import { fetchCodexPlanLimits } from "./codex-limits.ts";
 import { fetchCodexSessionUsage } from "./codex-session-usage.ts";
-import { fmtTokens, humanUntil } from "./fmt.ts";
+import { fmtTokens } from "./fmt.ts";
 import type { PlanLimits } from "./limits.ts";
 
 export function compactCodexLimits(limits: PlanLimits | null): string | null {
-  const windows = (limits?.windows ?? []).flatMap((window) => {
-    const match = /^Codex \((.+)\)$/.exec(window.label);
-    return match ? [{ ...window, duration: match[1]! }] : [];
-  });
-  if (!windows.length) return null;
-  return windows
-    .map((window) => {
-      const used = window.utilization === null ? "?" : `${Math.round(window.utilization)}%`;
-      const reset = window.resetsAt ? ` ↻ ${humanUntil(window.resetsAt)}` : "";
-      return `${window.duration} ${used}${reset}`;
-    })
-    .join(" / ");
+  const used = (limits?.windows ?? [])
+    .filter((window) => /^Codex \(.+\)$/.test(window.label))
+    .flatMap((window) =>
+      window.utilization === null || !Number.isFinite(window.utilization)
+        ? []
+        : [window.utilization],
+    );
+  // When Codex supplies more than one shared window, the most-consumed one is
+  // the useful compact warning. Labels and reset times belong in `/usage`.
+  return used.length ? `${Math.round(Math.max(...used))}%` : null;
 }
 
 /** Extra end-of-turn fields specific to the persisted Codex session/account. */
@@ -36,14 +34,11 @@ export async function codexSummaryParts(
 
   const usage = sessionResult.status === "fulfilled" ? sessionResult.value : null;
   const parts: string[] = [];
-  if (usage?.contextUsedPercent !== null && usage?.contextUsedPercent !== undefined) {
-    parts.push(`📚 ${usage.contextUsedPercent}% ctx`);
-  }
-  parts.push(`Σ ${fmtTokens(usage?.totalTokens ?? fallbackTopicTokens)}`);
+  parts.push(`Σ${fmtTokens(usage?.totalTokens ?? fallbackTopicTokens)}`);
 
   const limits = compactCodexLimits(
     limitsResult.status === "fulfilled" ? limitsResult.value : null,
   );
-  if (limits) parts.push(`⏳ ${limits}`);
+  if (limits) parts.push(`⏳${limits}`);
   return parts;
 }
