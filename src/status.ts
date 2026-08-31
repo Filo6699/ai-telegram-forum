@@ -45,7 +45,10 @@ export class TurnStatus {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private done = false;
 
-  constructor(private out: TopicRenderer) {}
+  constructor(
+    private out: TopicRenderer,
+    private detail?: () => Promise<string | null>,
+  ) {}
 
   get toolCalls(): number {
     return this.total;
@@ -60,6 +63,7 @@ export class TurnStatus {
     this.lastText = "⏳ …";
     this.messageId = await this.out.sendText(this.lastText, { silent: true });
     this.lastEditAt = Date.now();
+    if (this.detail) this.schedule();
   }
 
   /** Record a tool call and refresh the line (throttled). */
@@ -69,7 +73,7 @@ export class TurnStatus {
     this.schedule();
   }
 
-  private liveText(): string {
+  private liveText(detail: string | null = null): string {
     const top = [...this.counts.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, NAMED_TOOLS)
@@ -77,7 +81,7 @@ export class TurnStatus {
     const rest = this.counts.size - top.length;
     if (rest > 0) top.push(`+${rest}`);
     const tools = top.length ? ` · 🔧 ${top.join(", ")}` : "";
-    return `⏳ ${humanMs(this.elapsedMs)}${tools}`;
+    return `⏳ ${humanMs(this.elapsedMs)}${tools}${detail ? ` · ${detail}` : ""}`;
   }
 
   /**
@@ -91,8 +95,20 @@ export class TurnStatus {
     const wait = Math.max(editInterval(this.elapsedMs) - since, gateMs());
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.flush(this.liveText());
+      void this.refresh();
     }, Math.max(0, wait));
+  }
+
+  /** Refresh the optional provider detail immediately before editing the live line. */
+  private async refresh(): Promise<void> {
+    let detail: string | null = null;
+    try {
+      detail = (await this.detail?.()) ?? null;
+    } catch (err) {
+      console.warn("[status] reading live detail failed:", String(err));
+    }
+    // The final summary may have landed while the provider lookup was pending.
+    if (!this.done) await this.flush(this.liveText(detail));
   }
 
   private async flush(text: string, waitMs = 0): Promise<void> {

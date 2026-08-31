@@ -14,6 +14,8 @@ interface ThreadReadResult {
   thread?: { path?: string | null } | null;
 }
 
+const rolloutPaths = new Map<string, string>();
+
 interface TokenUsage extends CodexTokenBreakdown {
   total_tokens?: number;
 }
@@ -125,11 +127,15 @@ async function readRolloutUsage(path: string): Promise<CodexSessionUsage | null>
 export async function fetchCodexSessionUsage(
   sessionId: string,
 ): Promise<CodexSessionUsage | null> {
-  const result = await codexRequest<ThreadReadResult>("thread/read", {
-    threadId: sessionId,
-    includeTurns: false,
-  });
-  const path = result.thread?.path;
+  let path = rolloutPaths.get(sessionId);
+  if (!path) {
+    const result = await codexRequest<ThreadReadResult>("thread/read", {
+      threadId: sessionId,
+      includeTurns: false,
+    });
+    path = result.thread?.path ?? undefined;
+    if (path) rolloutPaths.set(sessionId, path);
+  }
   if (!path) return null;
   return readRolloutUsage(path);
 }

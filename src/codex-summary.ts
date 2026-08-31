@@ -1,8 +1,8 @@
 import { fetchCodexSessionUsage } from "./codex-session-usage.ts";
 import { formatCodexWeeklyPercent } from "./codex-quota.ts";
 
-/** Extra end-of-turn fields specific to the persisted Codex session. */
-export async function codexSummaryParts(sessionId: string | null): Promise<string[]> {
+/** Compact estimated weekly spend for one persisted Codex session. */
+export async function codexWeeklyPart(sessionId: string | null): Promise<string | null> {
   let usage = null;
   try {
     usage = sessionId ? await fetchCodexSessionUsage(sessionId) : null;
@@ -10,9 +10,14 @@ export async function codexSummaryParts(sessionId: string | null): Promise<strin
     console.warn("[summary] Codex session usage failed:", String(err));
   }
 
-  const parts: string[] = [];
   if (usage?.estimatedWeeklyPercent !== null && usage?.estimatedWeeklyPercent !== undefined) {
-    parts.push(`🧠 ${formatCodexWeeklyPercent(usage.estimatedWeeklyPercent)}`);
+    return `🧠 ${formatCodexWeeklyPercent(usage.estimatedWeeklyPercent)}`;
   }
-  return parts;
+  return null;
+}
+
+/** Extra end-of-turn fields specific to the persisted Codex session. */
+export async function codexSummaryParts(sessionId: string | null): Promise<string[]> {
+  const weekly = await codexWeeklyPart(sessionId);
+  return weekly ? [weekly] : [];
 }

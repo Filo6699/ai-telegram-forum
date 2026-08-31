@@ -8,7 +8,7 @@ import {
   type AgentTurnResult,
 } from "./agent-session.ts";
 import { cfg } from "./config.ts";
-import { codexSummaryParts } from "./codex-summary.ts";
+import { codexSummaryParts, codexWeeklyPart } from "./codex-summary.ts";
 import { isPendingTitle } from "./cwd.ts";
 import {
   addUsage,
@@ -212,7 +212,10 @@ export class TopicSession {
     this.turnModel = this.modelId;
     this.turnServiceTier = this.serviceTier;
     this.out.clear();
-    this.status = new TurnStatus(this.out);
+    this.status = new TurnStatus(
+      this.out,
+      this.provider === "codex" ? () => codexWeeklyPart(this.sessionId) : undefined,
+    );
     await this.status.start();
   }
 

@@ -128,6 +128,10 @@ consumes a model request; if it is unavailable, that field is simply omitted.
 Exact shared-account windows, token totals, and reset times remain available
 under `/usage`.
 
+While a Codex turn is running, the same session estimate joins the live line
+after native usage first becomes available, and advances as model responses are
+recorded (`⏳ 2m · 🔧 Shell ×8, apply_patch ×4, +2 · 🧠 0.8%`).
+
 **Model and reasoning effort.** Every new session opens with one provider-specific picker in the
 launcher, and the topic is only created once that's settled. Claude shows its
 models and supported effort levels as separate rows. Codex shows one row of
