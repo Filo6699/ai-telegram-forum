@@ -143,7 +143,7 @@ shows the separate model and effort rows. `light` is accepted in the JSON as an
 alias for Codex's `low` effort.
 
 ```dotenv
-CODEX_PRESETS={"Decent":{"model":"gpt-5.6-sol","effort":"high"},"Economy+":{"model":"gpt-5.6-luna","effort":"max"},"Economy":{"model":"gpt-5.6-luna","effort":"high"},"Light":{"model":"gpt-5.6-sol","effort":"low"}}
+CODEX_PRESETS={"Light":{"model":"gpt-5.6-sol","effort":"low"},"Economy":{"model":"gpt-5.6-luna","effort":"high"},"Economy+":{"model":"gpt-5.6-luna","effort":"max"},"Decent":{"model":"gpt-5.6-sol","effort":"high"}}
 CODEX_DEFAULT_PRESET=Decent
 ```
 
