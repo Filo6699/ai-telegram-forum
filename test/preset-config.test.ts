@@ -7,6 +7,7 @@ test("built-in Codex presets match the launcher defaults", () => {
   assert.deepEqual(
     presets.map(({ name, effort, serviceTier }) => ({ name, effort, serviceTier })),
     [
+      { name: "Light", effort: "low", serviceTier: "default" },
       { name: "Flash", effort: "low", serviceTier: "fast" },
       { name: "Normal", effort: "medium", serviceTier: "default" },
       { name: "Decent", effort: "high", serviceTier: "default" },

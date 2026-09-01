@@ -12,6 +12,7 @@ export const serviceTierLabel = (tier: ServiceTier): string =>
   tier === "fast" ? "fast" : tier === "default" ? "standard" : "default";
 
 const DEFAULT_CODEX_PRESETS: CodexPresetConfig[] = [
+  { name: "Light", model: "gpt-5.6-sol", effort: "low", serviceTier: "default" },
   { name: "Flash", model: "gpt-5.6-sol", effort: "low", serviceTier: "fast" },
   { name: "Normal", model: "gpt-5.6-sol", effort: "medium", serviceTier: "default" },
   { name: "Decent", model: "gpt-5.6-sol", effort: "high", serviceTier: "default" },
