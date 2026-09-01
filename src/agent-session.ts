@@ -12,7 +12,6 @@ import {
   codexInput,
   codexToolName,
   createCodexThread,
-  isCodexSend,
   readCodexUsage,
   type CodexInput,
 } from "./codex.ts";
@@ -79,6 +78,21 @@ export interface AgentSessionOptions extends AgentSettings {
 }
 
 const zeroUsage = (): Usage => ({ inTokens: 0, outTokens: 0, costUsd: 0 });
+
+/** The SDK types use snake_case, while Codex 0.151 can emit PascalCase item
+ * names in its JSON event stream. Accept both wire representations here. */
+function isTelegramMcpCall(
+  item: unknown,
+): item is { status: "completed"; arguments: unknown } {
+  if (!item || typeof item !== "object") return false;
+  const raw = item as Record<string, unknown>;
+  return (
+    (raw.type === "mcp_tool_call" || raw.type === "McpToolCall") &&
+    raw.server === "tg" &&
+    raw.tool === "send" &&
+    raw.status === "completed"
+  );
+}
 
 // `model` was added to the local adapter when estimated Codex cost was added;
 // keeping it optional here also works with the earlier token-only adapter.
@@ -399,11 +413,7 @@ class CodexAgentSession implements AgentSession {
             case "item.completed":
               if (event.item.type === "agent_message" && event.item.text.trim()) {
                 this.opts.hooks.text(event.item.text);
-              } else if (
-                isCodexSend(event.item) &&
-                event.item.type === "mcp_tool_call" &&
-                event.item.status === "completed"
-              ) {
+              } else if (isTelegramMcpCall(event.item)) {
                 const result = await this.opts.channel.send(event.item.arguments as TgSendArgs);
                 if (tgSendDelivered(result)) this.sent++;
                 else if (!this.failure) {
