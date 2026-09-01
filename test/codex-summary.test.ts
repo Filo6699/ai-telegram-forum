@@ -141,7 +141,8 @@ test("Codex quota credits discount cached input and apply fast mode", () => {
   assert.equal(estimateCodexCredits(usage, "gpt-5.6-sol", "fast"), 195);
   assert.equal(estimateCodexWeeklyPercent(90), 1);
   assert.equal(formatCodexWeeklyPercent(0.824), "0.8%");
-  assert.equal(formatCodexWeeklyPercent(0.01), "<0.1%");
+  assert.equal(formatCodexWeeklyPercent(0.01), "0.01%");
+  assert.equal(formatCodexWeeklyPercent(0.02), "0.02%");
 });
 
 test("Codex weekly summary shows this turn before the cumulative session", async () => {
