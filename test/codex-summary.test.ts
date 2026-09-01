@@ -10,6 +10,7 @@ import { parseCodexSessionUsage } from "../src/codex-session-usage.ts";
 import { formatCodexWeeklyPart } from "../src/codex-summary.ts";
 import { compactMs, fmtTokens } from "../src/fmt.ts";
 import { codexModelPicker, codexPresetName } from "../src/preset.ts";
+import { asServiceTier, serviceTierGroup } from "../src/preset-config.ts";
 
 test("native Codex usage aggregates every response and estimates weekly session spend", () => {
   const lines = [
@@ -92,6 +93,15 @@ test("Codex model picker exposes and selects configured presets", () => {
   assert.equal(picker.group.initial, "preset:0");
   assert.deepEqual(picker.selected(null), { kind: "preset", preset });
   assert.ok(picker.group.options.some((option) => option.label === `🎛️ ${preset.name}`));
+});
+
+test("the no-preset Codex launch picker exposes standard and fast modes", () => {
+  const group = serviceTierGroup(null);
+
+  assert.equal(group.fallback, "default");
+  assert.deepEqual(group.options.map((option) => option.value), ["default", "fast"]);
+  assert.equal(asServiceTier("fast"), "fast");
+  assert.equal(group.summary("fast"), "🚀 mode: fast");
 });
 
 test("summary durations use clock notation after one minute", () => {

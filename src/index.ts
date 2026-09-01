@@ -35,7 +35,12 @@ import {
   codexPresetPicker,
   type CodexPresetChoice,
 } from "./preset.ts";
-import { serviceTierLabel, type ServiceTier } from "./preset-config.ts";
+import {
+  asServiceTier,
+  serviceTierGroup,
+  serviceTierLabel,
+  type ServiceTier,
+} from "./preset-config.ts";
 import { fmtTokens } from "./fmt.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { fetchPlanLimits, planLimitsText } from "./limits.ts";
@@ -533,7 +538,13 @@ async function launch(
     title: `«${title}»`,
     groups: presetPicker
       ? [presetPicker.group]
-      : [modelGroup(nextModel ?? null, provider), effortGroup(nextEffort ?? null, cwd, provider)],
+      : provider === "codex"
+        ? [
+            modelGroup(nextModel ?? null, provider),
+            effortGroup(nextEffort ?? null, cwd, provider),
+            serviceTierGroup(nextServiceTier ?? null),
+          ]
+        : [modelGroup(nextModel ?? null, provider), effortGroup(nextEffort ?? null, cwd, provider)],
     firstWaitMs: LAUNCH_WAIT_MS,
     rewritten: true,
     allowCancel: true,
@@ -542,7 +553,7 @@ async function launch(
   const preset = presetPicker?.selected(picks.r ?? null);
   const effort = preset?.effort ?? asEffort(picks.e ?? null, provider);
   const model = preset?.model ?? asModel(picks.m ?? null);
-  const serviceTier: ServiceTier = preset?.serviceTier ?? null;
+  const serviceTier: ServiceTier = preset?.serviceTier ?? asServiceTier(picks.s ?? null);
   nextEffort = undefined;
   nextModel = undefined;
   nextServiceTier = undefined;
@@ -556,10 +567,11 @@ async function launch(
   // the settled picker and a "→ …" note sitting one above the other.
   const line =
     `→ «${title}»  (cwd: ${cwd})` +
-    `  🧠 ${providerLabel(provider)}` +
-    `  🤖 ${modelLabel(model, defaultModel(provider), provider)}` +
-    `  ⚙️ ${effortLabel(effort, defaultEffort(cwd, provider))}` +
-    (preset ? `  🎛️ ${preset.name}  🚀 ${serviceTierLabel(serviceTier)}` : "");
+    (preset
+      ? `  🎛️ ${preset.name}`
+      : `  🤖 ${modelLabel(model, defaultModel(provider), provider)}` +
+        `  ⚙️ ${effortLabel(effort, defaultEffort(cwd, provider))}` +
+        (provider === "codex" ? `  🚀 ${serviceTierLabel(serviceTier)}` : ""));
   const posted =
     messageId !== null &&
     (await ctx.api

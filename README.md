@@ -139,8 +139,8 @@ models and supported effort levels as separate rows. Codex shows one row of
 presets: each button selects a model, effort, and regular/fast service tier
 together. Configure the buttons with `CODEX_PRESETS` and the initial tick with
 `CODEX_DEFAULT_PRESET`. No presets are built in; without `CODEX_PRESETS`, Codex
-shows the separate model and effort rows. `light` is accepted in the JSON as an
-alias for Codex's `low` effort.
+shows separate model, effort, and standard/fast mode rows. `light` is accepted
+in the JSON as an alias for Codex's `low` effort.
 
 ```dotenv
 CODEX_PRESETS={"Light":{"model":"gpt-5.6-sol","effort":"low"},"Economy":{"model":"gpt-5.6-luna","effort":"high"},"Economy+":{"model":"gpt-5.6-luna","effort":"max"},"Decent":{"model":"gpt-5.6-sol","effort":"high"}}
