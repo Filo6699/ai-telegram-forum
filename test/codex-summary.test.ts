@@ -6,7 +6,11 @@ import {
   estimateCodexWeeklyPercent,
   formatCodexWeeklyPercent,
 } from "../src/codex-quota.ts";
-import { parseCodexSessionUsage } from "../src/codex-session-usage.ts";
+import {
+  mergeCodexSessionUsage,
+  parseCodexRollout,
+  parseCodexSessionUsage,
+} from "../src/codex-session-usage.ts";
 import { formatCodexWeeklyPart } from "../src/codex-summary.ts";
 import { compactMs, fmtTokens } from "../src/fmt.ts";
 import { codexModelPicker, codexPresetName } from "../src/preset.ts";
@@ -56,6 +60,75 @@ test("native Codex usage aggregates every response and estimates weekly session 
   assert.equal(usage.totalTokens, 3_100_000);
   assert.equal(usage.contextUsedPercent, 100);
   assert.ok(Math.abs(usage.estimatedWeeklyPercent! - 2.477777) < 0.000001);
+});
+
+test("Codex rollout usage discovers child-agent threads and merges their spend", () => {
+  const parent = parseCodexRollout(
+    [
+      JSON.stringify({
+        type: "turn_context",
+        payload: { model: "gpt-5.6-sol", service_tier: null },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: {
+              input_tokens: 100_000,
+              cached_input_tokens: 50_000,
+              output_tokens: 10_000,
+              total_tokens: 110_000,
+            },
+            model_context_window: 258_400,
+          },
+        },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "item_completed",
+          item: {
+            type: "CollabAgentToolCall",
+            receiver_thread_ids: ["child-1", "child-2"],
+          },
+        },
+      }),
+    ].join("\n"),
+  );
+  const child = parseCodexSessionUsage(
+    [
+      JSON.stringify({
+        type: "turn_context",
+        payload: { model: "gpt-5.6-sol", service_tier: null },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: {
+              input_tokens: 200_000,
+              cached_input_tokens: 100_000,
+              output_tokens: 20_000,
+              total_tokens: 220_000,
+            },
+          },
+        },
+      }),
+    ].join("\n"),
+  );
+
+  assert.deepEqual(parent.childThreadIds, ["child-1", "child-2"]);
+  assert.ok(parent.usage);
+  assert.ok(child);
+  const merged = mergeCodexSessionUsage([parent.usage, child]);
+  assert.equal(merged?.totalTokens, 330_000);
+  assert.equal(merged?.contextUsedPercent, parent.usage.contextUsedPercent);
+  assert.equal(
+    merged?.estimatedWeeklyPercent,
+    parent.usage.estimatedWeeklyPercent! + child.estimatedWeeklyPercent!,
+  );
 });
 
 test("Codex quota credits discount cached input and apply fast mode", () => {

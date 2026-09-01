@@ -20,18 +20,27 @@ interface TokenUsage extends CodexTokenBreakdown {
   total_tokens?: number;
 }
 
-interface TokenCountLine {
+interface RolloutLine {
   type?: string;
   payload?: {
     type?: string;
     model?: string | null;
     service_tier?: ServiceTier;
+    item?: {
+      type?: string;
+      receiver_thread_ids?: unknown;
+    };
     info?: {
       total_token_usage?: TokenUsage;
       last_token_usage?: TokenUsage;
       model_context_window?: number | null;
     } | null;
   };
+}
+
+export interface ParsedCodexRollout {
+  usage: CodexSessionUsage | null;
+  childThreadIds: string[];
 }
 
 export interface CodexSessionUsage {
@@ -48,15 +57,26 @@ class SessionUsageParser {
   private pricedResponses = 0;
   private contextUsedPercent: number | null = null;
   private responses = 0;
+  private children = new Set<string>();
 
   line(line: string): void {
-    if (!line.includes('"token_count"') && !line.includes('"turn_context"')) return;
-    let record: TokenCountLine;
+    const hasUsage = line.includes('"token_count"') || line.includes('"turn_context"');
+    const hasChildren = line.includes('"CollabAgentToolCall"');
+    if (!hasUsage && !hasChildren) return;
+    let record: RolloutLine;
     try {
-      record = JSON.parse(line) as TokenCountLine;
+      record = JSON.parse(line) as RolloutLine;
     } catch {
       return;
     }
+    if (record.payload?.item?.type === "CollabAgentToolCall") {
+      for (const id of Array.isArray(record.payload.item.receiver_thread_ids)
+        ? record.payload.item.receiver_thread_ids
+        : []) {
+        if (typeof id === "string" && id) this.children.add(id);
+      }
+    }
+    if (!hasUsage) return;
     if (record.type === "turn_context") {
       this.model = record.payload?.model ?? this.model;
       this.serviceTier = record.payload?.service_tier ?? null;
@@ -107,35 +127,94 @@ class SessionUsageParser {
           : null,
     };
   }
+
+  childThreadIds(): string[] {
+    return [...this.children];
+  }
 }
 
 /** Parse all native response usage in one append-only rollout. */
-export function parseCodexSessionUsage(text: string): CodexSessionUsage | null {
+export function parseCodexRollout(text: string): ParsedCodexRollout {
   const parser = new SessionUsageParser();
   for (const line of text.split("\n")) parser.line(line);
-  return parser.result();
+  return { usage: parser.result(), childThreadIds: parser.childThreadIds() };
 }
 
-async function readRolloutUsage(path: string): Promise<CodexSessionUsage | null> {
+export function parseCodexSessionUsage(text: string): CodexSessionUsage | null {
+  return parseCodexRollout(text).usage;
+}
+
+async function readRolloutUsage(path: string): Promise<ParsedCodexRollout> {
   const parser = new SessionUsageParser();
   const lines = createInterface({ input: createReadStream(path), crlfDelay: Infinity });
   for await (const line of lines) parser.line(line);
-  return parser.result();
+  return { usage: parser.result(), childThreadIds: parser.childThreadIds() };
 }
 
-/** Native cumulative usage and current context occupancy for one Codex thread. */
+/** Add native usage from a parent rollout and its child-agent rollouts. */
+export function mergeCodexSessionUsage(usages: CodexSessionUsage[]): CodexSessionUsage | null {
+  if (!usages.length) return null;
+  const first = usages[0]!;
+  return {
+    totalTokens: usages.reduce((sum, usage) => sum + usage.totalTokens, 0),
+    // Context occupancy belongs to the parent conversation, whose usage is
+    // intentionally first in the list. Child contexts must not be added.
+    contextUsedPercent: first.contextUsedPercent,
+    estimatedWeeklyPercent: usages.every((usage) => usage.estimatedWeeklyPercent !== null)
+      ? usages.reduce((sum, usage) => sum + usage.estimatedWeeklyPercent!, 0)
+      : null,
+  };
+}
+
+async function rolloutPath(sessionId: string): Promise<string | null> {
+  const cached = rolloutPaths.get(sessionId);
+  if (cached) return cached;
+  const result = await codexRequest<ThreadReadResult>("thread/read", {
+    threadId: sessionId,
+    includeTurns: false,
+  });
+  const path = result.thread?.path ?? null;
+  if (path) rolloutPaths.set(sessionId, path);
+  return path;
+}
+
+/** Native cumulative usage and current context occupancy for a Codex thread tree. */
 export async function fetchCodexSessionUsage(
   sessionId: string,
 ): Promise<CodexSessionUsage | null> {
-  let path = rolloutPaths.get(sessionId);
-  if (!path) {
-    const result = await codexRequest<ThreadReadResult>("thread/read", {
-      threadId: sessionId,
-      includeTurns: false,
-    });
-    path = result.thread?.path ?? undefined;
-    if (path) rolloutPaths.set(sessionId, path);
+  const rootPath = await rolloutPath(sessionId);
+  if (!rootPath) return null;
+
+  const pending = [{ sessionId, path: rootPath }];
+  const visited = new Set<string>();
+  const usages: CodexSessionUsage[] = [];
+
+  while (pending.length) {
+    const current = pending.shift()!;
+    if (visited.has(current.sessionId)) continue;
+    visited.add(current.sessionId);
+
+    let parsed: ParsedCodexRollout;
+    try {
+      parsed = await readRolloutUsage(current.path);
+    } catch (err) {
+      console.warn(`[usage] reading Codex rollout ${current.sessionId} failed:`, String(err));
+      continue;
+    }
+    if (parsed.usage) usages.push(parsed.usage);
+
+    for (const childId of parsed.childThreadIds) {
+      if (visited.has(childId)) continue;
+      try {
+        const childPath = await rolloutPath(childId);
+        if (childPath) pending.push({ sessionId: childId, path: childPath });
+      } catch (err) {
+        // A child can still be starting when the parent status line refreshes.
+        // It will be discovered again on the next refresh.
+        console.warn(`[usage] reading Codex child ${childId} failed:`, String(err));
+      }
+    }
   }
-  if (!path) return null;
-  return readRolloutUsage(path);
+
+  return mergeCodexSessionUsage(usages);
 }
