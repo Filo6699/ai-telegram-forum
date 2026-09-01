@@ -1,10 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { Api } from "grammy";
 import { z } from "zod";
-import { cfg } from "./config.ts";
-import { TopicRenderer } from "./render.ts";
-import { runTgSend } from "./tg-tools.ts";
 
 function arg(name: string): string {
   const index = process.argv.indexOf(`--${name}`);
@@ -17,8 +13,12 @@ const threadId = Number(arg("thread"));
 if (!Number.isFinite(threadId)) throw new Error("--thread must be a number");
 const cwd = arg("cwd");
 
-const out = new TopicRenderer(new Api(cfg.token), cfg.chatId, threadId);
 const server = new McpServer({ name: "tg", version: "1.0.0" });
+
+// Codex inherits MCP servers into subagents. This process must therefore not
+// have Telegram side effects: the owning broker delivers top-level calls from
+// the parent event stream. Child calls receive an acknowledgement only.
+const accepted = { content: [{ type: "text" as const, text: "accepted" }] };
 
 server.registerTool(
   "send",
@@ -33,7 +33,7 @@ server.registerTool(
         .describe("Local paths to attach, relative to the working directory or absolute."),
     },
   },
-  (args) => runTgSend(out, cwd, args),
+  async () => accepted,
 );
 
 await server.connect(new StdioServerTransport());

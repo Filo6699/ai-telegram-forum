@@ -20,13 +20,15 @@ way to say anything — if you never call it, they see nothing.
 
 - Send a message when you have something worth their attention: the answer, a
   question you're blocked on, or a warning. Then keep working.
+- You are the top-level session. Subagents must return their findings to you;
+  they must not use this tool to contact the person directly.
 - Do NOT narrate your progress. Tool activity is already shown to them as a live
   status line, updated automatically.
 - Write like a chat, not a report: a few lines, no headings, no recaps of what
   you just did. Markdown works — **bold**, \`code\`, and fenced code blocks.
 - Telegram has NO tables. Never send one: use a short list, \`Label: value\`
   lines, or a fenced code block if the columns really matter.
-- One call = one message = one notification on their phone. Batch related
+- One call = one finished message = one notification on their phone. Batch related
   thoughts into a single call instead of firing several in a row.
 - You can attach local files with the \`files\` argument — screenshots, images,
   logs, PDFs, an artifact you just produced. Paths are relative to your working
@@ -36,6 +38,8 @@ way to say anything — if you never call it, they see nothing.
 
 export interface TgChannel {
   server: ReturnType<typeof createSdkMcpServer>;
+  /** Deliver a message from the owning top-level session. */
+  send(args: TgSendArgs): Promise<TgSendResult>;
   /** Messages the agent posted this turn. Zero means it never spoke. */
   readonly sent: number;
   /** Called at the start of every turn — `sent` counts the current turn only. */
@@ -49,9 +53,19 @@ export interface TgSendArgs {
 
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
 const failure = (s: string) => ({ ...text(s), isError: true as const });
+export type TgSendResult = ReturnType<typeof text> | ReturnType<typeof failure>;
 
-/** Provider-neutral implementation shared by Claude's in-process MCP server
- * and the stdio MCP server Codex starts for each turn. */
+/** Whether a send call delivered at least its text or one attachment. */
+export function tgSendDelivered(result: TgSendResult): boolean {
+  return (
+    !("isError" in result) ||
+    result.content[0]?.text.includes("text was sent on its own") === true
+  );
+}
+
+/** Provider-neutral Telegram delivery used by the broker and Claude's
+ * in-process MCP server. Codex's stdio MCP server is deliberately side-effect
+ * free because Codex inherits it into subagents. */
 export async function runTgSend(
   out: TopicRenderer,
   cwd: string,
@@ -99,6 +113,8 @@ export async function runTgSend(
 export function createTgChannel(out: TopicRenderer, cwd: string): TgChannel {
   let sent = 0;
 
+  const send = (args: TgSendArgs): Promise<TgSendResult> => runTgSend(out, cwd, args);
+
   const server = createSdkMcpServer({
     name: SERVER_NAME,
     version: "1.0.0",
@@ -121,11 +137,8 @@ export function createTgChannel(out: TopicRenderer, cwd: string): TgChannel {
             ),
         },
         async (args) => {
-          const result = await runTgSend(out, cwd, args);
-          const delivered =
-            !("isError" in result) ||
-            result.content[0]?.text.includes("text was sent on its own");
-          if (delivered) sent++;
+          const result = await send(args);
+          if (tgSendDelivered(result)) sent++;
           return result;
         },
         { alwaysLoad: true },
@@ -135,6 +148,7 @@ export function createTgChannel(out: TopicRenderer, cwd: string): TgChannel {
 
   return {
     server,
+    send,
     get sent() {
       return sent;
     },

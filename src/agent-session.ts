@@ -23,7 +23,7 @@ import { defaultModel, type Model } from "./model.ts";
 import { clearPermissions } from "./permission.ts";
 import type { ServiceTier } from "./preset-config.ts";
 import type { Provider } from "./provider.ts";
-import { TG_SEND_TOOL, type TgChannel } from "./tg-tools.ts";
+import { TG_SEND_TOOL, tgSendDelivered, type TgChannel, type TgSendArgs } from "./tg-tools.ts";
 
 export interface AgentInput {
   text: string;
@@ -404,7 +404,11 @@ class CodexAgentSession implements AgentSession {
                 event.item.type === "mcp_tool_call" &&
                 event.item.status === "completed"
               ) {
-                this.sent++;
+                const result = await this.opts.channel.send(event.item.arguments as TgSendArgs);
+                if (tgSendDelivered(result)) this.sent++;
+                else if (!this.failure) {
+                  this.failure = `⚠️ Telegram delivery failed: ${result.content[0]?.text ?? "unknown error"}`;
+                }
               } else if (event.item.type === "error" && !this.failure) {
                 this.failure = `⚠️ ${event.item.message}`;
               }
