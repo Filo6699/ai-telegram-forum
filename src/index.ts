@@ -93,7 +93,7 @@ function totalsText(): string {
   const s = totals();
   const provider = nextProvider ?? cfg.provider;
   const preset =
-    provider === "codex"
+    provider === "codex" && cfg.codexPresets.length
       ? codexPresetPicker(nextModel, nextEffort, nextServiceTier).selected(null)
       : null;
   return (
@@ -525,7 +525,7 @@ async function launch(
   // nobody answers still starts, but once the user reaches for a button the
   // launch waits for them to finish.
   const presetPicker =
-    provider === "codex"
+    provider === "codex" && cfg.codexPresets.length
       ? codexPresetPicker(nextModel, nextEffort, nextServiceTier)
       : undefined;
   const { picks, cancelled, messageId } = await askPick(bot, {

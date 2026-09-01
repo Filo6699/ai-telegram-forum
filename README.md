@@ -138,13 +138,12 @@ launcher, and the topic is only created once that's settled. Claude shows its
 models and supported effort levels as separate rows. Codex shows one row of
 presets: each button selects a model, effort, and regular/fast service tier
 together. Configure the buttons with `CODEX_PRESETS` and the initial tick with
-`CODEX_DEFAULT_PRESET`. The default config provides **Light** (Sol, low),
-**Flash** (Sol, low, fast), **Normal** (Sol, medium), and **Decent** (Sol, high),
-with Decent selected by default. `light` is accepted in the JSON as an alias
-for Codex's `low` effort.
+`CODEX_DEFAULT_PRESET`. No presets are built in; without `CODEX_PRESETS`, Codex
+shows the separate model and effort rows. `light` is accepted in the JSON as an
+alias for Codex's `low` effort.
 
 ```dotenv
-CODEX_PRESETS={"Light":{"model":"gpt-5.6-sol","effort":"low"},"Flash":{"model":"gpt-5.6-sol","effort":"low","fast":true},"Normal":{"model":"gpt-5.6-sol","effort":"medium"},"Decent":{"model":"gpt-5.6-sol","effort":"high"}}
+CODEX_PRESETS={"Decent":{"model":"gpt-5.6-sol","effort":"high"},"Economy+":{"model":"gpt-5.6-luna","effort":"max"},"Economy":{"model":"gpt-5.6-luna","effort":"high"},"Light":{"model":"gpt-5.6-sol","effort":"low"}}
 CODEX_DEFAULT_PRESET=Decent
 ```
 

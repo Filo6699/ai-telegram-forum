@@ -2,18 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseCodexPresets, parseDefaultCodexPreset } from "../src/preset-config.ts";
 
-test("built-in Codex presets match the launcher defaults", () => {
+test("Codex has no built-in presets", () => {
   const presets = parseCodexPresets(undefined);
-  assert.deepEqual(
-    presets.map(({ name, effort, serviceTier }) => ({ name, effort, serviceTier })),
-    [
-      { name: "Light", effort: "low", serviceTier: "default" },
-      { name: "Flash", effort: "low", serviceTier: "fast" },
-      { name: "Normal", effort: "medium", serviceTier: "default" },
-      { name: "Decent", effort: "high", serviceTier: "default" },
-    ],
+  assert.deepEqual(presets, []);
+  assert.equal(parseDefaultCodexPreset(undefined, presets), null);
+  assert.throws(
+    () => parseDefaultCodexPreset("Decent", presets),
+    /requires at least one configured CODEX_PRESETS entry/,
   );
-  assert.equal(parseDefaultCodexPreset(undefined, presets), "Decent");
 });
 
 test("custom presets preserve labels and accept light as low", () => {

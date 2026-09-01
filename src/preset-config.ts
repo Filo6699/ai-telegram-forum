@@ -11,18 +11,11 @@ export interface CodexPresetConfig {
 export const serviceTierLabel = (tier: ServiceTier): string =>
   tier === "fast" ? "fast" : tier === "default" ? "standard" : "default";
 
-const DEFAULT_CODEX_PRESETS: CodexPresetConfig[] = [
-  { name: "Light", model: "gpt-5.6-sol", effort: "low", serviceTier: "default" },
-  { name: "Flash", model: "gpt-5.6-sol", effort: "low", serviceTier: "fast" },
-  { name: "Normal", model: "gpt-5.6-sol", effort: "medium", serviceTier: "default" },
-  { name: "Decent", model: "gpt-5.6-sol", effort: "high", serviceTier: "default" },
-];
-
 const EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
 /** Parse `{ "Flash": { "model": "gpt-5.6-sol", "effort": "low", "fast": true } }`. */
 export function parseCodexPresets(raw: string | undefined): CodexPresetConfig[] {
-  if (!raw) return DEFAULT_CODEX_PRESETS.map((preset) => ({ ...preset }));
+  if (!raw) return [];
 
   let parsed: unknown;
   try {
@@ -80,7 +73,13 @@ export function parseCodexPresets(raw: string | undefined): CodexPresetConfig[] 
 export function parseDefaultCodexPreset(
   raw: string | undefined,
   presets: CodexPresetConfig[],
-): string {
+): string | null {
+  if (!presets.length) {
+    if (raw?.trim()) {
+      throw new Error("CODEX_DEFAULT_PRESET requires at least one configured CODEX_PRESETS entry");
+    }
+    return null;
+  }
   const wanted =
     raw?.trim() ||
     (presets.some((preset) => preset.name === "Decent") ? "Decent" : presets[0]!.name);
