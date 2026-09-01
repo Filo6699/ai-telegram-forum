@@ -8,7 +8,11 @@ import {
   type AgentTurnResult,
 } from "./agent-session.ts";
 import { cfg } from "./config.ts";
-import { codexSummaryParts, codexWeeklyPart } from "./codex-summary.ts";
+import {
+  codexSummaryParts,
+  codexWeeklyPart,
+  codexWeeklyPercent,
+} from "./codex-summary.ts";
 import { isPendingTitle } from "./cwd.ts";
 import {
   addUsage,
@@ -57,6 +61,7 @@ export class TopicSession {
   private turnEffort: Effort = null;
   private turnModel: Model = null;
   private turnServiceTier: ServiceTier = null;
+  private turnWeeklyBaseline: number | null = null;
   private closed = false;
 
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -211,12 +216,22 @@ export class TopicSession {
     this.turnEffort = this.effortLevel;
     this.turnModel = this.modelId;
     this.turnServiceTier = this.serviceTier;
+    this.turnWeeklyBaseline = null;
     this.out.clear();
     this.status = new TurnStatus(
       this.out,
-      this.provider === "codex" ? () => codexWeeklyPart(this.sessionId) : undefined,
+      this.provider === "codex"
+        ? () => codexWeeklyPart(this.sessionId, this.turnWeeklyBaseline)
+        : undefined,
     );
     await this.status.start();
+    if (this.provider === "codex") {
+      // runStreamed starts only after this hook resolves, so this snapshot
+      // cannot accidentally include any response from the new turn.
+      this.turnWeeklyBaseline = this.sessionId
+        ? await codexWeeklyPercent(this.sessionId)
+        : 0;
+    }
   }
 
   private async endTurn(result: AgentTurnResult): Promise<void> {
@@ -246,7 +261,7 @@ export class TopicSession {
     if (this.sessionId) setSession(this.threadId, this.sessionId);
     const extra =
       this.provider === "codex"
-        ? await codexSummaryParts(this.sessionId)
+        ? await codexSummaryParts(this.sessionId, this.turnWeeklyBaseline)
         : [];
     await status?.finish(
       summarize(

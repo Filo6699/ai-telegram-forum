@@ -7,6 +7,7 @@ import {
   formatCodexWeeklyPercent,
 } from "../src/codex-quota.ts";
 import { parseCodexSessionUsage } from "../src/codex-session-usage.ts";
+import { formatCodexWeeklyPart } from "../src/codex-summary.ts";
 import { compactMs, fmtTokens } from "../src/fmt.ts";
 import { codexModelPicker, codexPresetName } from "../src/preset.ts";
 
@@ -67,6 +68,11 @@ test("Codex quota credits discount cached input and apply fast mode", () => {
   assert.equal(estimateCodexWeeklyPercent(90), 1);
   assert.equal(formatCodexWeeklyPercent(0.824), "0.8%");
   assert.equal(formatCodexWeeklyPercent(0.01), "<0.1%");
+});
+
+test("Codex weekly summary shows this turn before the cumulative session", async () => {
+  assert.equal(formatCodexWeeklyPart(2.2, 1.8), "🧠 0.4% | 2.2%");
+  assert.equal(formatCodexWeeklyPart(2.2), "🧠 2.2%");
 });
 
 test("an exact Codex setting tuple collapses to its preset name", () => {
