@@ -16,6 +16,7 @@ interface CreditRate {
 
 /** Official ChatGPT Codex credits per million tokens. */
 const CREDIT_RATES: Record<string, CreditRate> = {
+  "gpt-6-astra": { input: 250, cachedInput: 25, output: 1250, fastMultiplier: 2.5 },
   "gpt-5.6-sol": { input: 100, cachedInput: 10, output: 500, fastMultiplier: 2.5 },
   "gpt-5.6-terra": { input: 50, cachedInput: 5, output: 300, fastMultiplier: 2.5 },
   "gpt-5.6-luna": { input: 5, cachedInput: 0.5, output: 30, fastMultiplier: 2.5 },
