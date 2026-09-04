@@ -28,6 +28,7 @@ const CLAUDE_MODELS: Known[] = [
 ];
 
 const CODEX_MODELS: Known[] = [
+  { id: "gpt-6-astra", label: "GPT-6 Astra", alias: "astra" },
   { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", alias: "sol" },
   { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", alias: "terra" },
   { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", alias: "luna" },

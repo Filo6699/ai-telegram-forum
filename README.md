@@ -165,7 +165,7 @@ on appears in its summary line and in `/usage`.
 
 `/model` works the same way, one for one: Claude offers `opus`, `sonnet`,
 `haiku`, and `fable`; Codex offers its configured presets alongside `sol`,
-`terra`, `luna`, and full model ids. A Codex preset button applies the preset's
+`terra`, `luna`, `astra`, and full model ids. A Codex preset button applies the preset's
 model, effort, and service tier together; an individual model button only
 changes the model.
 `/model` alone brings up the buttons. `/model default` hands it back to the
