@@ -140,4 +140,18 @@ export class TurnStatus {
     // The one edit worth waiting for: it's the whole record of the turn.
     await this.flush(summary, SUMMARY_WAIT_MS);
   }
+
+  /** Finish a side turn by folding its answer and status into the same reply. */
+  async finishWithAnswer(answer: string, summary: string): Promise<void> {
+    this.done = true;
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (this.messageId === null) {
+      await this.out.sendText(`${answer}\n\n${summary}`);
+      return;
+    }
+    await this.out.replaceWithAnswer(this.messageId, answer, summary);
+  }
 }

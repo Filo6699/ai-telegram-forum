@@ -19,6 +19,7 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 | `src/codex.ts` | Codex SDK options, thread/input/event adaptation |
 | `src/agent-session.ts` | provider-neutral session lifecycle |
 | `src/codex-app-server.ts` | one-shot Codex app-server requests |
+| `src/codex-app-server-client.ts` | persistent topic app-server connection; main + `/btw` turns |
 | `src/codex-limits.ts` | Codex plan limits through the local app-server |
 | `src/codex-tg-server.ts` | topic-bound stdio MCP server for Codex |
 | `src/provider.ts` | provider selection and labels |

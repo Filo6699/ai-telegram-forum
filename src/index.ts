@@ -323,6 +323,26 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
     return true;
   }
 
+  if (cmd === "/btw") {
+    const prompt = ctx.message.text.trim().replace(/^\/btw(?:@[a-z0-9_]+)?\s*/i, "").trim();
+    if (!prompt) {
+      await replySilently(ctx, "⚠️ usage: `/btw <message>`", {
+        message_thread_id: thread,
+        parse_mode: "Markdown",
+        reply_parameters: { message_id: ctx.message.message_id },
+      });
+      return true;
+    }
+    const t = await sessionTopic(ctx, thread);
+    if (!t) return true;
+    // Detached: a side turn can run alongside the main turn, and Telegram's
+    // update loop must remain free for commands and callback queries.
+    void sessionFor(bot, t)
+      .btw(contentOf(prompt, []), ctx.message.message_id)
+      .catch((err) => console.error(`[btw:${thread}] failed:`, err));
+    return true;
+  }
+
   if (cmd === "/provider" || cmd === "/agent") {
     const arg = ctx.message.text.trim().split(/\s+/)[1];
     if (arg) {
@@ -659,8 +679,8 @@ async function route(
     setStatus(thread, "active");
   }
 
-  // Claude receives this at its next step. Codex's SDK cannot steer a running
-  // turn, so the same input becomes the next turn without interrupting it.
+  // Claude receives this at its next step. Codex deliberately queues ordinary
+  // messages as the next turn; only `/btw` forks alongside an active turn.
   await sessionFor(bot, t).send(contentOf(text, images));
 }
 
@@ -785,6 +805,7 @@ async function main() {
 
   await bot.api.setMyCommands([
     { command: "usage", description: "Tokens/cost here (or all in the launcher) + plan limits" },
+    { command: "btw", description: "Ask a side question without interrupting the main task" },
     { command: "provider", description: "Next session agent: Claude or Codex" },
     { command: "effort", description: "Reasoning effort: /effort high, or /effort for buttons" },
     { command: "model", description: "Model: /model sonnet, or /model for buttons" },

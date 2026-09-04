@@ -5,16 +5,17 @@ import {
   type Query,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { Thread as CodexThread, Usage as CodexUsage } from "@openai/codex-sdk";
 import type { Bot } from "grammy";
 import { queryOptions, readUsage, type Usage } from "./claude.ts";
 import {
-  codexInput,
-  codexToolName,
-  createCodexThread,
+  codexAppThreadParams,
+  codexSideBoundaryItem,
+  codexSideForkParams,
   readCodexUsage,
   type CodexInput,
 } from "./codex.ts";
+import { CodexAppServerClient, type AppServerNotification } from "./codex-app-server-client.ts";
+import { cfg } from "./config.ts";
 import { PENDING_TITLE_MARK } from "./cwd.ts";
 import type { Effort } from "./effort.ts";
 import type { ImagePart } from "./media.ts";
@@ -44,6 +45,10 @@ export interface AgentTurnResult {
   sent: number;
 }
 
+export interface AgentSideResult extends AgentTurnResult {
+  answer: string;
+}
+
 export interface AgentSessionHooks {
   beginTurn(): Promise<void>;
   session(id: string): void;
@@ -62,6 +67,7 @@ export interface AgentSessionHooks {
 export interface AgentSession {
   readonly controlQuery: Query | null;
   send(input: AgentInput): Promise<void>;
+  btw(input: AgentInput, onTool: (name: string) => void): Promise<AgentSideResult>;
   interrupt(): Promise<boolean>;
   applySettings(settings: AgentSettings): Promise<void>;
   suggestTitle(current: string): Promise<string | null>;
@@ -79,24 +85,9 @@ export interface AgentSessionOptions extends AgentSettings {
 
 const zeroUsage = (): Usage => ({ inTokens: 0, outTokens: 0, costUsd: 0 });
 
-/** The SDK types use snake_case, while Codex 0.151 can emit PascalCase item
- * names in its JSON event stream. Accept both wire representations here. */
-function isTelegramMcpCall(
-  item: unknown,
-): item is { status: "completed"; arguments: unknown } {
-  if (!item || typeof item !== "object") return false;
-  const raw = item as Record<string, unknown>;
-  return (
-    (raw.type === "mcp_tool_call" || raw.type === "McpToolCall") &&
-    raw.server === "tg" &&
-    raw.tool === "send" &&
-    raw.status === "completed"
-  );
-}
-
-// `model` was added to the local adapter when estimated Codex cost was added;
-// keeping it optional here also works with the earlier token-only adapter.
-const codexUsage = readCodexUsage as unknown as (usage: CodexUsage, model?: Model) => Usage;
+// Keep the app-server adapter compatible with the earlier token-only helper as
+// well as the newer model-priced helper while that accounting work is local.
+const codexUsage = readCodexUsage as unknown as (usage: any, model?: Model) => Usage;
 
 function claudeMessage(input: AgentInput): SDKUserMessage {
   const content: SDKUserMessage["message"]["content"] = input.images.length
@@ -149,6 +140,31 @@ class ClaudeAgentSession implements AgentSession {
     this.wake = null;
     if (!this.running) void this.run();
     await this.beginTurn();
+  }
+
+  async btw(input: AgentInput): Promise<AgentSideResult> {
+    if (input.images.length) throw new Error("Claude /btw currently accepts text only");
+    // Claude Code exposes side_question on its streaming control transport,
+    // but the SDK's Query declaration has not caught up with the runtime API.
+    if (!this.running) void this.run();
+    await Promise.resolve();
+    const q = this.q as
+      | (Query & {
+          askSideQuestion(
+            question: string,
+          ): Promise<{ response: string; synthetic: boolean } | null>;
+        })
+      | null;
+    if (!q?.askSideQuestion) throw new Error("this Claude Code version does not expose /btw");
+    const result = await q.askSideQuestion(input.text);
+    return {
+      ok: result !== null,
+      usage: zeroUsage(),
+      failure: result ? null : "⚠️ Claude returned no side answer",
+      stopped: false,
+      sent: 0,
+      answer: result?.response ?? "",
+    };
   }
 
   async interrupt(): Promise<boolean> {
@@ -296,8 +312,10 @@ class ClaudeAgentSession implements AgentSession {
 
 class CodexAgentSession implements AgentSession {
   private pending: CodexInput[] = [];
-  private thread: CodexThread | null = null;
-  private abort: AbortController | null = null;
+  private server = new CodexAppServerClient();
+  private parentId: string | null = null;
+  private opening: Promise<string> | null = null;
+  private activeTurnId: string | null = null;
   private running = false;
   private closed = false;
   private turnActive = false;
@@ -324,16 +342,48 @@ class CodexAgentSession implements AgentSession {
     if (!this.running) void this.run();
   }
 
+  async btw(input: AgentInput, onTool: (name: string) => void): Promise<AgentSideResult> {
+    const parentId = await this.ensureThread();
+    const fork = await this.server.request<{ thread: { id: string } }>(
+      "thread/fork",
+      codexSideForkParams({
+        parentId,
+        threadId: this.opts.threadId,
+        cwd: this.opts.cwd,
+        effort: this.settings.effort,
+        model: this.settings.model,
+        serviceTier: this.settings.serviceTier,
+      }),
+    );
+    const sideId = fork.thread.id;
+    try {
+      await this.server.request("thread/inject_items", {
+        threadId: sideId,
+        items: [codexSideBoundaryItem()],
+      });
+      return await this.runAppTurn(sideId, input, {
+        onTool,
+        deliverTelegram: false,
+      });
+    } finally {
+      await this.server.request("thread/unsubscribe", { threadId: sideId }).catch((err) => {
+        console.warn(`[btw:${this.opts.threadId}] discarding side thread failed:`, String(err));
+      });
+    }
+  }
+
   async interrupt(): Promise<boolean> {
-    if (!this.turnActive || !this.abort) return false;
+    if (!this.turnActive || !this.parentId || !this.activeTurnId) return false;
     this.stopped = true;
-    this.abort.abort();
+    await this.server.request("turn/interrupt", {
+      threadId: this.parentId,
+      turnId: this.activeTurnId,
+    });
     return true;
   }
 
   async applySettings(settings: AgentSettings): Promise<void> {
     this.settings = { ...settings };
-    this.resetThread();
   }
 
   async suggestTitle(current: string): Promise<string | null> {
@@ -342,18 +392,37 @@ class CodexAgentSession implements AgentSession {
 
   close(): void {
     this.closed = true;
-    this.abort?.abort();
+    this.server.close();
   }
 
-  private resetThread(): void {
-    this.thread = createCodexThread({
-      threadId: this.opts.threadId,
-      cwd: this.opts.cwd,
-      sessionId: this.settings.sessionId,
-      effort: this.settings.effort,
-      model: this.settings.model,
-      serviceTier: this.settings.serviceTier,
-    });
+  private async ensureThread(): Promise<string> {
+    if (this.parentId) return this.parentId;
+    if (this.opening) return this.opening;
+    this.opening = (async () => {
+      const common = codexAppThreadParams({
+        threadId: this.opts.threadId,
+        cwd: this.opts.cwd,
+        effort: this.settings.effort,
+        model: this.settings.model,
+        serviceTier: this.settings.serviceTier,
+      });
+      const result = this.settings.sessionId
+        ? await this.server.request<{ thread: { id: string } }>("thread/resume", {
+            ...common,
+            threadId: this.settings.sessionId,
+            excludeTurns: true,
+          })
+        : await this.server.request<{ thread: { id: string } }>("thread/start", common);
+      this.parentId = result.thread.id;
+      this.settings.sessionId = result.thread.id;
+      this.opts.hooks.session(result.thread.id);
+      return result.thread.id;
+    })();
+    try {
+      return await this.opening;
+    } finally {
+      this.opening = null;
+    }
   }
 
   private async beginTurn(): Promise<void> {
@@ -381,7 +450,6 @@ class CodexAgentSession implements AgentSession {
   private async run(): Promise<void> {
     this.running = true;
     this.closed = false;
-    if (!this.thread) this.resetThread();
 
     try {
       while (!this.closed && this.pending.length) {
@@ -390,62 +458,16 @@ class CodexAgentSession implements AgentSession {
           text: batch.map((message) => message.text).filter(Boolean).join("\n\n"),
           images: batch.flatMap((message) => message.images),
         };
-        this.abort = new AbortController();
         await this.beginTurn();
-        const streamed = await this.thread!.runStreamed(codexInput(input), {
-          signal: this.abort.signal,
+        const parentId = await this.ensureThread();
+        const result = await this.runAppTurn(parentId, input, {
+          onTool: (name) => this.opts.hooks.tool(name),
+          deliverTelegram: true,
         });
-        let terminal = false;
-
-        for await (const event of streamed.events) {
-          switch (event.type) {
-            case "thread.started":
-              this.settings.sessionId = event.thread_id;
-              this.opts.hooks.session(event.thread_id);
-              break;
-
-            case "item.started": {
-              const name = codexToolName(event.item);
-              if (name) this.opts.hooks.tool(name);
-              break;
-            }
-
-            case "item.completed":
-              if (event.item.type === "agent_message" && event.item.text.trim()) {
-                this.opts.hooks.text(event.item.text);
-              } else if (isTelegramMcpCall(event.item)) {
-                const result = await this.opts.channel.send(event.item.arguments as TgSendArgs);
-                if (tgSendDelivered(result)) this.sent++;
-                else if (!this.failure) {
-                  this.failure = `⚠️ Telegram delivery failed: ${result.content[0]?.text ?? "unknown error"}`;
-                }
-              } else if (event.item.type === "error" && !this.failure) {
-                this.failure = `⚠️ ${event.item.message}`;
-              }
-              break;
-
-            case "turn.completed":
-              terminal = true;
-              await this.finish(true, codexUsage(event.usage, this.settings.model));
-              break;
-
-            case "turn.failed":
-              if (!this.stopped) this.failure = `⚠️ ${event.error.message}`;
-              terminal = true;
-              await this.finish(false, zeroUsage());
-              break;
-
-            case "error":
-              if (!this.stopped) this.failure = `⚠️ ${event.message}`;
-              break;
-          }
-        }
-
-        if (!terminal && this.turnActive) {
-          if (!this.stopped) this.failure ??= "⚠️ Codex ended without a turn result";
-          await this.finish(false, zeroUsage());
-        }
-        this.abort = null;
+        this.failure = result.failure;
+        this.sent = result.sent;
+        this.stopped = result.stopped;
+        await this.finish(result.ok, result.usage);
       }
     } catch (err) {
       if (!this.stopped) {
@@ -455,10 +477,157 @@ class CodexAgentSession implements AgentSession {
       if (this.turnActive) await this.finish(false, zeroUsage());
     } finally {
       this.running = false;
-      this.abort = null;
+      this.activeTurnId = null;
       clearPermissions(this.opts.threadId);
       if (!this.closed && this.pending.length) void this.run();
     }
+  }
+
+  private async runAppTurn(
+    threadId: string,
+    input: CodexInput,
+    options: { onTool(name: string): void; deliverTelegram: boolean },
+  ): Promise<AgentSideResult> {
+    let turnId: string | null = null;
+    let answer = "";
+    let hasFinalAnswer = false;
+    let usage = zeroUsage();
+    let failure: string | null = null;
+    let sent = 0;
+    const deliveries: Promise<void>[] = [];
+
+    let settle!: (result: AgentSideResult) => void;
+    let reject!: (error: Error) => void;
+    const completed = new Promise<AgentSideResult>((resolve, rejectResult) => {
+      settle = resolve;
+      reject = rejectResult;
+    });
+
+    const belongs = (params: any): boolean =>
+      params?.threadId === threadId && (!turnId || !params.turnId || params.turnId === turnId);
+    const onNotification = (event: AppServerNotification) => {
+      if (event.method === "client/closed") {
+        this.parentId = null;
+        this.activeTurnId = null;
+        reject(event.params.error);
+        return;
+      }
+      const params = event.params;
+      if (!belongs(params)) return;
+
+      if (event.method === "turn/started") {
+        turnId ??= params.turn.id;
+        if (threadId === this.parentId) this.activeTurnId = turnId;
+      } else if (event.method === "item/started") {
+        const name = appServerToolName(params.item);
+        if (name) options.onTool(name);
+      } else if (event.method === "item/completed") {
+        const item = params.item;
+        if (item.type === "agentMessage" && item.text?.trim()) {
+          if (item.phase === "final_answer") {
+            answer = item.text;
+            hasFinalAnswer = true;
+          } else if (!hasFinalAnswer) {
+            answer = item.text;
+          }
+          if (options.deliverTelegram) this.opts.hooks.text(item.text);
+        } else if (
+          options.deliverTelegram &&
+          item.type === "mcpToolCall" &&
+          item.server === "tg" &&
+          item.tool === "send" &&
+          item.status === "completed"
+        ) {
+          deliveries.push(
+            this.opts.channel
+              .send(item.arguments as TgSendArgs)
+              .then((result) => {
+                if (tgSendDelivered(result)) sent++;
+                else failure ??= `⚠️ Telegram delivery failed: ${result.content[0]?.text ?? "unknown error"}`;
+              })
+              .catch((err) => {
+                failure ??= `⚠️ Telegram delivery failed: ${String(err)}`;
+              }),
+          );
+        }
+      } else if (event.method === "thread/tokenUsage/updated") {
+        const last = params.tokenUsage?.last;
+        if (last) usage = appServerUsage(last, this.settings.model);
+      } else if (event.method === "error" && !params.willRetry) {
+        failure ??= `⚠️ ${params.error?.message ?? "Codex turn failed"}`;
+      } else if (event.method === "turn/completed") {
+        const status = params.turn.status;
+        void Promise.all(deliveries).then(() => {
+          settle({
+            ok: status === "completed",
+            stopped: status === "interrupted",
+            failure:
+              failure ??
+              (status === "failed" ? `⚠️ ${params.turn.error?.message ?? "Codex turn failed"}` : null),
+            usage,
+            sent,
+            answer,
+          });
+        });
+      }
+    };
+    const off = this.server.onNotification(onNotification);
+    try {
+      const started = await this.server.request<{ turn: { id: string } }>("turn/start", {
+        threadId,
+        input: appServerInput(input),
+        model: this.settings.model ?? cfg.codexModel,
+        effort: this.settings.effort,
+        serviceTierForTurn: this.settings.serviceTier ?? "default",
+      });
+      turnId ??= started.turn.id;
+      if (threadId === this.parentId) this.activeTurnId = turnId;
+      return await completed;
+    } finally {
+      off();
+      if (threadId === this.parentId) this.activeTurnId = null;
+    }
+  }
+}
+
+const appServerInput = (input: CodexInput): any[] => [
+  ...(input.text.trim()
+    ? [{ type: "text", text: input.text, text_elements: [] }]
+    : input.images.length
+      ? [{ type: "text", text: "Examine the attached image.", text_elements: [] }]
+      : []),
+  ...input.images.map((image) => ({ type: "localImage", path: image.path })),
+];
+
+function appServerUsage(raw: any, model: Model): Usage {
+  return codexUsage(
+    {
+      input_tokens: raw.inputTokens ?? 0,
+      cached_input_tokens: raw.cachedInputTokens ?? 0,
+      cache_write_input_tokens: raw.cacheWriteInputTokens ?? 0,
+      output_tokens: raw.outputTokens ?? 0,
+      reasoning_output_tokens: raw.reasoningOutputTokens ?? 0,
+    },
+    model,
+  );
+}
+
+function appServerToolName(item: any): string | null {
+  switch (item?.type) {
+    case "commandExecution":
+      return "Shell";
+    case "fileChange":
+      return "apply_patch";
+    case "webSearch":
+      return "web_search";
+    case "mcpToolCall":
+      return item.server === "tg" && item.tool === "send"
+        ? null
+        : `mcp__${item.server}__${item.tool}`;
+    case "plan":
+      return "update_plan";
+    default:
+      return null;
   }
 }
 

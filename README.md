@@ -176,6 +176,16 @@ is remembered across an idle shutdown; in the launcher it becomes the next
 Codex launch's **Custom** choice (or pre-selects Claude's model row). The model
 a turn ran on is in its summary line and in `/usage`.
 
+`/btw <message>`, inside a session topic, asks a side question without interrupting
+or steering the main task. The broker creates the same ephemeral history fork
+as Codex CLI for Codex, and uses Claude Code's native `side_question` control
+request for Claude. The side exchange can inspect the parent context but is not
+added to the parent transcript. Its live status starts immediately as a
+direct reply to the command, then that one reply becomes the finished answer
+with the compact status line appended. Side-turn tokens are included in the
+topic's usage totals when the provider reports them (currently Codex). Multiple
+side questions may run alongside the main turn.
+
 `/stop`, inside a topic, interrupts the turn running there — the running tool is
 aborted, any permission prompt still open is denied, and messages you sent while
 it was working remain queued. The session itself stays up and continues with
@@ -324,6 +334,7 @@ message received during a Codex turn becomes the next turn automatically.
 | `src/claude.ts` | SDK options: model, effort, permissions, usage accounting |
 | `src/codex.ts` | Codex SDK options, thread/input/event adaptation |
 | `src/codex-app-server.ts` | one-shot requests to Codex's local app-server |
+| `src/codex-app-server-client.ts` | persistent topic connection for Codex turns and `/btw` forks |
 | `src/codex-limits.ts` | Codex ChatGPT rate limits behind `/usage` |
 | `src/codex-tg-server.ts` | Codex's topic-bound stdio MCP `send` server |
 | `src/tg-tools.ts` | shared `send` implementation + Claude's in-process MCP server |
@@ -339,10 +350,10 @@ message received during a Codex turn becomes the next turn automatically.
 
 ## Limitations
 
-- Codex's TypeScript SDK does not expose mid-turn steering, interactive approval
-  callbacks, generated titles, or cost. The broker uses the
-  closest safe behavior described above. `/stop`, resume, model/effort changes,
-  images, tool status, token usage, and the direct `send`/file tool do work.
+- Codex runs through its local app-server so ordinary turns and ephemeral
+  `/btw` forks share one live topic session. Interactive approvals and generated
+  titles are still not exposed by the bridge; `/stop`, resume, model/effort
+  changes, images, tool status, token usage, and the direct `send`/file tool work.
 - The agent decides when to write, through its `send` tool. A long turn isn't
   silent — a live status line tracks tool activity and ends as a summary
   (duration, tool calls, and provider-specific usage) — but there is no token-by-token

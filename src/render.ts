@@ -67,6 +67,11 @@ interface SendTextOptions {
   silent?: boolean;
 }
 
+interface TopicRendererOptions {
+  /** Make every newly posted chunk a direct reply to this Telegram message. */
+  replyToMessageId?: number;
+}
+
 /**
  * Rendering tiers for one chunk, best first. Formatted output is never
  * truncated — cutting mid-escape or mid-tag is exactly what breaks the parse;
@@ -122,6 +127,7 @@ export class TopicRenderer {
     private api: Api,
     private chatId: number,
     private threadId: number,
+    private options: TopicRendererOptions = {},
   ) {}
 
   /**
@@ -143,7 +149,7 @@ export class TopicRenderer {
   }
 
   /** Split raw markdown into <=RAW_CHUNK pieces without breaking code fences. */
-  private chunkRaw(text: string): string[] {
+  private chunkRaw(text: string, limit = RAW_CHUNK): string[] {
     const lines = text.split("\n");
     const chunks: string[] = [];
     let cur: string[] = [];
@@ -160,7 +166,7 @@ export class TopicRenderer {
 
     for (const line of lines) {
       const isFence = line.trimStart().startsWith("```");
-      if (curLen + line.length + 1 > RAW_CHUNK && cur.length) {
+      if (curLen + line.length + 1 > limit && cur.length) {
         if (fenceLang !== null) {
           cur.push("```"); // close current block
           flushCur();
@@ -189,6 +195,14 @@ export class TopicRenderer {
         try {
           const sent = await this.api.sendMessage(this.chatId, text, {
             message_thread_id: this.threadId,
+            ...(this.options.replyToMessageId
+              ? {
+                  reply_parameters: {
+                    message_id: this.options.replyToMessageId,
+                    allow_sending_without_reply: true,
+                  },
+                }
+              : {}),
             ...(opts.silent ? { disable_notification: true } : {}),
             ...(mode ? { parse_mode: mode } : {}),
           });
@@ -216,6 +230,26 @@ export class TopicRenderer {
       if (id !== null) last = id;
     }
     return last;
+  }
+
+  /**
+   * Replace a live placeholder with a finished answer whose compact status is
+   * part of the same reply. Long answers retain that invariant on their final
+   * chunk instead of losing the suffix to Telegram's length limit.
+   */
+  async replaceWithAnswer(messageId: number, body: string, status: string): Promise<void> {
+    const suffix = `\n\n${status}`;
+    const chunks = this.chunkRaw(flattenTables(body), Math.max(400, RAW_CHUNK - suffix.length));
+    if (!chunks.length) chunks.push("⚠️ The agent returned no answer.");
+    const last = chunks.length - 1;
+    chunks[last] += suffix;
+
+    if (!(await this.edit(messageId, chunks[0]!, SEND_WAIT_MS))) {
+      await this.sendText(chunks.shift()!);
+    } else {
+      chunks.shift();
+    }
+    for (const chunk of chunks) await this.sendText(chunk);
   }
 
   /** One upload attempt: a single file, or an album of them. Throws on refusal. */

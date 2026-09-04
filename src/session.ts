@@ -62,6 +62,7 @@ export class TopicSession {
   private turnModel: Model = null;
   private turnServiceTier: ServiceTier = null;
   private turnWeeklyBaseline: number | null = null;
+  private sideTurns = 0;
   private closed = false;
 
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -178,6 +179,57 @@ export class TopicSession {
   }
 
   /**
+   * Ask a provider-native side question. Its renderer is scoped to
+   * the invoking Telegram message, so answer and status form one direct reply
+   * without sharing the main turn's output buffer or status line.
+   */
+  async btw(content: AgentInput, replyToMessageId: number): Promise<void> {
+    touch(this.threadId);
+    this.sideTurns++;
+    this.armIdleTimer();
+
+    const out = new TopicRenderer(this.bot.api, cfg.chatId, this.threadId, {
+      replyToMessageId,
+    });
+    const status = new TurnStatus(out);
+    const effort = this.effortLevel ?? defaultEffort(this.cwd, this.provider);
+    const model = modelLabel(
+      this.modelId ?? defaultModel(this.provider),
+      undefined,
+      this.provider,
+    );
+    const preset = codexPresetName(this.modelId, this.effortLevel, this.serviceTier);
+    await status.start();
+
+    try {
+      const result = await this.agent.btw(content, (name) => status.tool(name));
+      // Codex app-server reports side-turn usage. Claude's side_question
+      // control response currently does not, so don't invent tokens or a turn.
+      if (this.provider === "codex") addUsage(this.threadId, result.usage);
+      const summary = summarize(
+        result.ok && !result.failure,
+        status,
+        result.usage,
+        effort,
+        model,
+        this.provider === "codex" ? this.serviceTier : null,
+        result.stopped,
+        [],
+        this.provider,
+        this.provider === "codex" ? preset : null,
+      );
+      const answer = [result.answer, result.failure].filter(Boolean).join("\n\n");
+      await status.finishWithAnswer(answer, summary);
+    } catch (err) {
+      console.error(`[btw:${this.threadId}] side turn failed:`, err);
+      await status.finishWithAnswer(`❌ ${String(err)}`, `⚠️ ${compactMs(status.elapsedMs)}`);
+    } finally {
+      this.sideTurns--;
+      if (!this.closed) this.armIdleTimer();
+    }
+  }
+
+  /**
    * Abort only the running turn. Input already queued for later is preserved.
    * Returns false when there was nothing to interrupt.
    */
@@ -202,7 +254,7 @@ export class TopicSession {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => {
       // Never pull the rug out from under a running turn.
-      if (this.turnActive) return this.armIdleTimer();
+      if (this.turnActive || this.sideTurns > 0) return this.armIdleTimer();
       console.log(`[session] closing idle session for topic ${this.threadId}`);
       forget(this.threadId);
       this.close();
