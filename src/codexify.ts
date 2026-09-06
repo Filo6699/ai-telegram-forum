@@ -113,8 +113,8 @@ function topicLink(threadId: number): string {
   return `https://t.me/c/${internal}/${threadId}`;
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+export async function adoptCodex(argv: string[]): Promise<void> {
+  const args = parseArgs(argv);
   if (brokerPid() === null) {
     throw new Error(
       "the ai-telegram-forum broker isn't running — start it with `npm start` " +
@@ -130,7 +130,7 @@ async function main(): Promise<void> {
     if (existing.status === "closed") {
       await api
         .reopenForumTopic(cfg.chatId, existing.thread_id)
-        .catch((err) => console.warn(`[codexify] reopening ${existing.thread_id} failed:`, String(err)));
+        .catch((err) => console.warn(`[telegramify] reopening ${existing.thread_id} failed:`, String(err)));
       setStatus(existing.thread_id, "active");
     }
     console.log(`Already in Telegram: «${existing.title}»\n${topicLink(existing.thread_id)}`);
@@ -165,7 +165,7 @@ async function main(): Promise<void> {
     `as well and the two will fight over the transcript — pick one.`;
   await api
     .sendMessage(cfg.chatId, intro, { message_thread_id: threadId })
-    .catch((err) => console.warn("[codexify] intro message failed:", String(err)));
+    .catch((err) => console.warn("[telegramify] intro message failed:", String(err)));
 
   if (carried) {
     await new TopicRenderer(api, cfg.chatId, threadId).sendText(
@@ -178,8 +178,3 @@ async function main(): Promise<void> {
       topicLink(threadId),
   );
 }
-
-main().catch((err) => {
-  console.error(`[codexify] ${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
-});

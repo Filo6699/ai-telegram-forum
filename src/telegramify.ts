@@ -1,5 +1,5 @@
 /**
- * Adopt an existing Claude Code session into the forum.
+ * Adopt an existing Claude Code or Codex session into the forum.
  *
  * A session started in the terminal already lives on disk; all this bot needs
  * to keep talking to it is a topic bound to its id. So `/telegramify` doesn't
@@ -10,8 +10,9 @@
  *
  *   npm run telegramify -- --session <uuid> [--cwd <dir>] [--title <text>]
  *
- * With no `--session`, `$CLAUDE_CODE_SESSION_ID` is used (set inside every
- * Claude Code session), and failing that the most recent session in `--cwd`.
+ * The provider is selected explicitly with `--provider`, or inferred from the
+ * session id exported by Claude Code / Codex. With neither, Claude remains the
+ * default for backwards compatibility.
  */
 import {
   getSessionInfo,
@@ -36,6 +37,33 @@ interface Args {
   cwd?: string;
   title?: string;
   dryRun?: boolean;
+}
+
+type Provider = "claude" | "codex";
+
+/** Pull the provider-only switch out before handing argv to either adapter. */
+function selectProvider(argv: string[]): { provider: Provider; argv: string[] } {
+  let explicit: Provider | undefined;
+  const rest: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] !== "--provider") {
+      rest.push(argv[i]!);
+      continue;
+    }
+    const value = argv[++i];
+    if (value !== "claude" && value !== "codex") {
+      throw new Error("--provider needs claude or codex");
+    }
+    explicit = value;
+  }
+
+  if (explicit) return { provider: explicit, argv: rest };
+  const hasClaude = Boolean(process.env.CLAUDE_CODE_SESSION_ID);
+  const hasCodex = Boolean(process.env.CODEX_THREAD_ID ?? process.env.CODEX_SESSION_ID);
+  if (hasClaude && hasCodex) {
+    throw new Error("both Claude and Codex session ids are set; pass --provider claude or codex");
+  }
+  return { provider: hasCodex ? "codex" : "claude", argv: rest };
 }
 
 function parseArgs(argv: string[]): Args {
@@ -190,8 +218,8 @@ function topicLink(threadId: number): string {
   return `https://t.me/c/${internal}/${threadId}`;
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+async function adoptClaude(argv: string[]): Promise<void> {
+  const args = parseArgs(argv);
 
   // A topic is only worth creating if something is polling for it. Without the
   // broker the session would look adopted and answer nothing.
@@ -264,6 +292,16 @@ async function main(): Promise<void> {
   console.log(
     `Moved to Telegram: «${isPendingTitle(title) ? title.slice(2) : title}»\n${topicLink(threadId)}`,
   );
+}
+
+async function main(): Promise<void> {
+  const selected = selectProvider(process.argv.slice(2));
+  if (selected.provider === "codex") {
+    const { adoptCodex } = await import("./codexify.ts");
+    await adoptCodex(selected.argv);
+    return;
+  }
+  await adoptClaude(selected.argv);
 }
 
 main().catch((err) => {

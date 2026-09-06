@@ -198,20 +198,21 @@ session in a terminal — `claude --resume <id>` or `codex resume <id>` in its c
 `/id` gives just the session id. Both only work inside a session topic, and
 only once the first turn has recorded a session id.
 
-## Moving a Claude terminal session to Telegram (`/telegramify`)
+## Moving a terminal session to Telegram (`telegramify`)
 
-A Claude session you started in the terminal already lives on disk, so adopting it is
-just a matter of binding a topic to its id — nothing is copied or replayed into
-the session.
+A Claude or Codex session you started in the terminal already lives on disk, so
+adopting it is just a matter of binding a topic to its id — nothing is copied or
+replayed into the session.
 
 ```bash
-npm run install-command      # writes ~/.claude/commands/telegramify.md, once
+npm run install-command      # installs the command for Claude Code and Codex
 ```
 
-Then, inside any Claude Code session:
+Then invoke it inside a session:
 
 ```
-/telegramify
+Claude Code: /telegramify
+Codex:       $telegramify
 ```
 
 It creates a topic named after the session and prints its link. Keep writing
@@ -230,37 +231,21 @@ before touching Telegram.
 Straight from the shell, without the slash command:
 
 ```bash
-npm run telegramify -- --session <uuid>      # a specific session, found anywhere
-npm run telegramify -- --cwd /srv/app        # the newest session in that project
-npm run telegramify -- --dry-run             # show what it would adopt
+npm run telegramify -- --provider claude --session <uuid>
+npm run telegramify -- --provider codex --session <uuid>
+npm run telegramify -- --provider claude --cwd /srv/app
+npm run telegramify -- --provider codex --cwd /srv/app
+npm run telegramify -- --provider codex --cwd /srv/app --dry-run
 ```
 
 > Don't keep talking to the same session in both places — the terminal and the
 > bot would resume from the same transcript and overwrite each other's tail.
 > Adopting a session twice is safe though: you get the existing topic back.
 
-## Moving a Codex terminal session to Telegram (`codexify`)
-
-Codex exposes `CODEX_THREAD_ID` inside a running session, so ask it to run the
-broker's command (use the broker's absolute directory when the session is in a
-different project):
-
-```bash
-cd /path/to/ai-telegram-forum && npm run codexify
-```
-
-From a regular shell, select a saved thread explicitly or adopt the newest CLI
-thread for a cwd:
-
-```bash
-npm run codexify -- --session <uuid>
-npm run codexify -- --cwd /srv/app
-npm run codexify -- --dry-run
-```
-
-Like `/telegramify`, this binds the existing native transcript rather than
-copying it, carries the last completed final answer into the topic when one is
-available, refuses duplicate adoption, and requires a live broker heartbeat.
+With no `--provider`, the CLI infers Codex from `CODEX_THREAD_ID` /
+`CODEX_SESSION_ID`, Claude from `CLAUDE_CODE_SESSION_ID`, and otherwise defaults
+to Claude for compatibility. The old `npm run codexify` name remains as an
+alias.
 
 ## Working directories
 
@@ -320,10 +305,10 @@ message received during a Codex turn becomes the next turn automatically.
 |---|---|
 | `src/index.ts`  | bot entry, auth, routing by `message_thread_id` |
 | `src/session.ts` | one live Agent SDK session per topic |
-| `src/telegramify.ts` | adopt an existing terminal session into a topic |
-| `src/codexify.ts` | adopt an existing Codex terminal session into a topic |
+| `src/telegramify.ts` | unified CLI for adopting an existing terminal session into a topic |
+| `src/codexify.ts` | Codex adapter used by the unified adoption CLI |
 | `src/heartbeat.ts` | is the broker running? (written by the bot, read by the CLI) |
-| `src/install-command.ts` | install the `/telegramify` slash command |
+| `src/install-command.ts` | install `telegramify` for Claude Code and Codex |
 | `src/permission.ts` | tool approval prompts (inline buttons) |
 | `src/picker.ts` | the inline-button picker `/effort` and `/model` share |
 | `src/preset-config.ts` | Codex launch-preset config and service-tier types |

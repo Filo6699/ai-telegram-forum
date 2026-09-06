@@ -9,9 +9,9 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 |---|---|
 | `src/index.ts`  | bot entry, auth, routing by `message_thread_id` |
 | `src/session.ts` | one live SDK session per topic; turn lifecycle |
-| `src/telegramify.ts` | CLI: adopt an existing on-disk session into a new topic |
-| `src/codexify.ts` | CLI: adopt an existing Codex thread into a new topic |
-| `src/install-command.ts` | writes the `/telegramify` slash command for Claude Code |
+| `src/telegramify.ts` | unified CLI: adopt an existing on-disk session into a new topic |
+| `src/codexify.ts` | Codex adapter used by the unified adoption CLI |
+| `src/install-command.ts` | installs `telegramify` for Claude Code and Codex |
 | `src/heartbeat.ts` | broker liveness file: written by the bot, read by the CLI |
 | `src/permission.ts` | tool approval prompts + their inline buttons |
 | `src/effort.ts` | reasoning-effort pickers, `/effort`, level parsing |
@@ -43,9 +43,9 @@ npm start          # run
 npm run dev        # watch mode
 npm run typecheck  # tsc --noEmit — must be clean before you commit
 
-npm run install-command          # install /telegramify into ~/.claude/commands
+npm run install-command          # install /telegramify for Claude and $telegramify for Codex
 npm run telegramify -- --dry-run # adopt the current terminal session into a topic
-npm run codexify -- --dry-run    # same for a Codex thread
+npm run codexify -- --dry-run    # backwards-compatible Codex alias
 ```
 
 ## Rules
@@ -77,7 +77,7 @@ npm run codexify -- --dry-run    # same for a Codex thread
   exactly that reason. And a `callback_query:data` handler that doesn't own the
   callback must pass it on with `next()`, or the handler registered after it
   never sees anything.
-- **Adoption binds, it doesn't copy.** `/telegramify` and `codexify` only write a topic row
+- **Adoption binds, it doesn't copy.** `telegramify` only writes a topic row
   pointing at a session id that already exists on disk — never replay or import
   a transcript. One session id belongs to at most one topic, or the terminal and
   the bot resume from the same file and clobber each other's tail. It also

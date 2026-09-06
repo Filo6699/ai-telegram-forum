@@ -32,7 +32,7 @@
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "telegramify": "tsx src/telegramify.ts",
-    "codexify": "tsx src/codexify.ts",
+    "codexify": "npm run telegramify -- --provider codex",
     "install-command": "tsx src/install-command.ts",
     "typecheck": "tsc --noEmit"
   },
