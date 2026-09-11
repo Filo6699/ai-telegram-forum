@@ -1,11 +1,12 @@
 import type { ServiceTier } from "./preset-config.ts";
 
 /**
- * POC calibration from the local Pro weekly window on 2026-08-31. OpenAI does
+ * Recalibrated from local Pro windows through 2026-09-11, including Astra.
+ * Recent windows imply ~8,517–8,579 credits; rounded to 8,500. OpenAI does
  * not publish the included weekly capacity, so unlike the per-model rates this
  * denominator is deliberately an estimate.
  */
-const WEEKLY_CREDITS_ESTIMATE = 9_000;
+const WEEKLY_CREDITS_ESTIMATE = 8_500;
 
 interface CreditRate {
   input: number;

@@ -59,7 +59,7 @@ test("native Codex usage aggregates every response and estimates weekly session 
   assert.ok(usage);
   assert.equal(usage.totalTokens, 3_100_000);
   assert.equal(usage.contextUsedPercent, 100);
-  assert.ok(Math.abs(usage.estimatedWeeklyPercent! - 2.477777) < 0.000001);
+  assert.ok(Math.abs(usage.estimatedWeeklyPercent! - 2.623529) < 0.000001);
 });
 
 test("Codex rollout usage discovers child-agent threads and merges their spend", () => {
@@ -139,7 +139,7 @@ test("Codex quota credits discount cached input and apply fast mode", () => {
   };
   assert.equal(estimateCodexCredits(usage, "gpt-5.6-sol", null), 78);
   assert.equal(estimateCodexCredits(usage, "gpt-5.6-sol", "fast"), 195);
-  assert.equal(estimateCodexWeeklyPercent(90), 1);
+  assert.equal(estimateCodexWeeklyPercent(85), 1);
   assert.equal(formatCodexWeeklyPercent(0.824), "0.8%");
   assert.equal(formatCodexWeeklyPercent(0.01), "0.01%");
   assert.equal(formatCodexWeeklyPercent(0.02), "0.02%");
