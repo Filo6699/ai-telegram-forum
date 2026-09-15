@@ -47,6 +47,7 @@ import { fetchPlanLimits, planLimitsText } from "./limits.ts";
 import { MediaGroupCollector } from "./media-group.ts";
 import { registerPermissionButtons } from "./permission.ts";
 import { liveSession, sessionFor, type AgentInput } from "./session.ts";
+import { sideTurnReady } from "./side-turn.ts";
 import {
   asProvider,
   parseProvider,
@@ -262,7 +263,11 @@ function shq(s: string): string {
  * `/resume` and `/id` only make sense inside a task topic — the launcher has no
  * session of its own. Returns the topic, or replies with why it can't.
  */
-async function sessionTopic(ctx: any, thread: number | undefined): Promise<Topic | undefined> {
+async function sessionTopic(
+  ctx: any,
+  thread: number | undefined,
+  allowLive = false,
+): Promise<Topic | undefined> {
   const t = thread !== undefined && !isLauncher(thread) ? getTopic(thread) : undefined;
   if (!t) {
     await replySilently(ctx, "⚠️ run this inside a session topic, not here.", {
@@ -270,7 +275,7 @@ async function sessionTopic(ctx: any, thread: number | undefined): Promise<Topic
     });
     return;
   }
-  if (!t.session_id) {
+  if (!sideTurnReady(t.session_id, allowLive && Boolean(liveSession(t.thread_id)))) {
     await replySilently(ctx, "⚠️ this topic has no session id yet — send a message first.", {
       message_thread_id: thread,
     });
@@ -333,7 +338,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
       });
       return true;
     }
-    const t = await sessionTopic(ctx, thread);
+    const t = await sessionTopic(ctx, thread, true);
     if (!t) return true;
     // Detached: a side turn can run alongside the main turn, and Telegram's
     // update loop must remain free for commands and callback queries.
