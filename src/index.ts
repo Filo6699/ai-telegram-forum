@@ -1,4 +1,6 @@
 import { Bot, InlineKeyboard } from "grammy";
+import { progressLevels, toolcallModes, type Progress, type Toolcalls } from "./activity.ts";
+import { setActivity } from "./db.ts";
 import { cfg } from "./config.ts";
 import { fetchCodexPlanLimits } from "./codex-limits.ts";
 import {
@@ -121,6 +123,8 @@ function totalsText(): string {
  * pre-selection.
  */
 let nextEffort: Effort | undefined;
+let nextProgress: Progress = "off";
+let nextToolcalls: Toolcalls = "off";
 let nextModel: Model | undefined;
 let nextServiceTier: ServiceTier | undefined;
 let nextProvider: Provider | undefined;
@@ -301,6 +305,42 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
   // ours to answer, but it isn't a prompt either — drop it.
   if (addressee && addressee.toLowerCase() !== botUsername.toLowerCase()) return true;
   const cmd = `/${name.toLowerCase()}`;
+
+  if (cmd === "/progress" || cmd === "/toolcalls") {
+    const setting = cmd === "/progress" ? "progress" : "toolcalls";
+    const values = setting === "progress" ? progressLevels : toolcallModes;
+    const launcher = isLauncher(thread);
+    const topic = launcher ? undefined : getTopic(thread!);
+    if (!launcher && !topic) {
+      await replySilently(ctx, "⚠️ Use this command in a session topic or the launcher.", { message_thread_id: thread });
+      return true;
+    }
+    const current = topic?.[setting] ?? (setting === "progress" ? nextProgress : nextToolcalls);
+    const apply = (value: string) => {
+      if (launcher) {
+        if (setting === "progress") nextProgress = value as Progress;
+        else nextToolcalls = value as Toolcalls;
+      } else setActivity(thread!, setting, value as Progress | Toolcalls);
+    };
+    const arg = ctx.message.text.trim().split(/\s+/)[1]?.toLowerCase();
+    if (arg) {
+      if ((values as readonly string[]).includes(arg)) {
+        apply(arg);
+        await replySilently(ctx, `${setting}: ${arg}${launcher ? " (next session)" : ""}`, { message_thread_id: thread });
+      } else await replySilently(ctx, `Usage: ${cmd} ${values.join(" | ")}`, { message_thread_id: thread });
+    } else {
+      void askPick(bot, {
+        threadId: thread,
+        title: `${setting} for ${launcher ? "the next session" : "this topic"}`,
+        allowCancel: true,
+        groups: [{ key: "a", options: values.map(value => ({ value, label: value })), perRow: 3,
+          initial: current, fallback: "off", summary: value => `${setting}: ${value}` }],
+      }).then(({ picks, cancelled }) => {
+        if (!cancelled) apply(picks.a ?? current);
+      }).catch(err => console.warn(`[${setting}] picker failed:`, String(err)));
+    }
+    return true;
+  }
 
   if (cmd === "/id") {
     const t = await sessionTopic(ctx, thread);
@@ -579,6 +619,10 @@ async function launch(
   const effort = preset?.effort ?? asEffort(picks.e ?? null, provider);
   const model = preset?.model ?? asModel(picks.m ?? null);
   const serviceTier: ServiceTier = preset?.serviceTier ?? asServiceTier(picks.s ?? null);
+  const progress = nextProgress;
+  const toolcalls = nextToolcalls;
+  nextProgress = "off";
+  nextToolcalls = "off";
   nextEffort = undefined;
   nextModel = undefined;
   nextServiceTier = undefined;
@@ -587,6 +631,8 @@ async function launch(
   const topic = await ctx.api.createForumTopic(cfg.chatId, title);
   const tid = topic.message_thread_id;
   createTopic({ threadId: tid, cwd, title, provider, effort, model, serviceTier });
+  setActivity(tid, "progress", progress);
+  setActivity(tid, "toolcalls", toolcalls);
 
   // The picker becomes the launch line: one message for one launch, rather than
   // the settled picker and a "→ …" note sitting one above the other.
@@ -813,6 +859,8 @@ async function main() {
     { command: "btw", description: "Ask a side question without interrupting the main task" },
     { command: "provider", description: "Next session agent: Claude or Codex" },
     { command: "effort", description: "Reasoning effort: /effort high, or /effort for buttons" },
+    { command: "progress", description: "Progress updates: off, brief, detailed" },
+    { command: "toolcalls", description: "Tool calls: off, only_file_edits, full" },
     { command: "model", description: "Model: /model sonnet, or /model for buttons" },
     { command: "stop", description: "Interrupt the turn running in this topic" },
     { command: "resume", description: "Shell command to continue this session in a terminal" },

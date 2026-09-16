@@ -1,4 +1,5 @@
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
+import { progressInstruction, toolcallText } from "./activity.ts";
 import type { Bot } from "grammy";
 import type { Usage } from "./claude.ts";
 import {
@@ -95,7 +96,11 @@ export class TopicSession {
           this.sessionId = id;
         },
         text: (value) => this.out.hold(value),
-        tool: (name) => this.status?.tool(name),
+        tool: async (name, input) => {
+          this.status?.tool(name);
+          const text = toolcallText(getTopic(this.threadId)?.toolcalls ?? "off", name, input);
+          if (text) await this.out.sendText(text);
+        },
         endTurn: (result) => this.endTurn(result),
       },
     });
@@ -175,7 +180,8 @@ export class TopicSession {
   async send(content: AgentInput): Promise<void> {
     touch(this.threadId);
     this.armIdleTimer();
-    await this.agent.send(content);
+    const progress = getTopic(this.threadId)?.progress ?? "off";
+    await this.agent.send({ ...content, text: `${progressInstruction(progress)}\n\n${content.text}` });
   }
 
   /**

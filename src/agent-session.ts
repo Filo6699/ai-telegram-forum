@@ -53,7 +53,7 @@ export interface AgentSessionHooks {
   beginTurn(): Promise<void>;
   session(id: string): void;
   text(value: string): void;
-  tool(name: string): void;
+  tool(name: string, input?: unknown): void | Promise<void>;
   endTurn(result: AgentTurnResult): Promise<void>;
 }
 
@@ -270,7 +270,7 @@ class ClaudeAgentSession implements AgentSession {
             for (const block of msg.message.content) {
               if (block.type === "text") said.push(block.text);
               else if (block.type === "tool_use" && block.name !== TG_SEND_TOOL) {
-                this.opts.hooks.tool(block.name);
+                await this.opts.hooks.tool(block.name, block.input);
               }
             }
             const text = said.join("");
@@ -461,7 +461,7 @@ class CodexAgentSession implements AgentSession {
         await this.beginTurn();
         const parentId = await this.ensureThread();
         const result = await this.runAppTurn(parentId, input, {
-          onTool: (name) => this.opts.hooks.tool(name),
+          onTool: (name, input) => this.opts.hooks.tool(name, input),
           deliverTelegram: true,
         });
         this.failure = result.failure;
@@ -486,7 +486,7 @@ class CodexAgentSession implements AgentSession {
   private async runAppTurn(
     threadId: string,
     input: CodexInput,
-    options: { onTool(name: string): void; deliverTelegram: boolean },
+    options: { onTool(name: string, input?: unknown): void | Promise<void>; deliverTelegram: boolean },
   ): Promise<AgentSideResult> {
     let turnId: string | null = null;
     let answer = "";
@@ -520,7 +520,9 @@ class CodexAgentSession implements AgentSession {
         if (threadId === this.parentId) this.activeTurnId = turnId;
       } else if (event.method === "item/started") {
         const name = appServerToolName(params.item);
-        if (name) options.onTool(name);
+        if (name) deliveries.push(Promise.resolve(options.onTool(name, params.item)).catch((err) => {
+          console.warn("[toolcalls] delivery failed:", String(err));
+        }));
       } else if (event.method === "item/completed") {
         const item = params.item;
         if (item.type === "agentMessage" && item.text?.trim()) {
@@ -620,6 +622,14 @@ function appServerToolName(item: any): string | null {
       return "apply_patch";
     case "webSearch":
       return "web_search";
+    case "dynamicToolCall":
+      return item.tool ?? "dynamic_tool";
+    case "collabAgentToolCall":
+      return item.tool ?? "agent";
+    case "imageGeneration":
+      return "image_generation";
+    case "imageView":
+      return "view_image";
     case "mcpToolCall":
       return item.server === "tg" && item.tool === "send"
         ? null

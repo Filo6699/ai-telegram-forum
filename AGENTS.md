@@ -52,8 +52,10 @@ npm run codexify -- --dry-run    # backwards-compatible Codex alias
 
 - **The agent speaks for itself.** Everything the user reads comes from the
   agent calling `mcp__tg__send`; the transcript is never relayed. Don't add
-  "🔧 Bash"-style activity posts — tool calls belong in the live status line,
-  which is one bot-owned message per turn, edited in place.
+  unsolicited activity posts — tool calls belong in the live status line,
+  which is one bot-owned message per turn, edited in place. The explicit
+  `/toolcalls` setting enables individual tool-call messages; `/progress`
+  controls agent-authored progress updates.
 - **Never post a partial thought.** One `send` call is one finished message.
   Assistant text is still buffered, but only as the fallback for a turn that
   ended without the agent ever calling `send` — losing a reply the session

@@ -133,6 +133,20 @@ line after native usage first becomes available, and advances as model
 responses are recorded
 (`⏳ 2m · 🔧 Shell ×8, apply_patch ×4, +2 · 🧠 0.4% | 2.2%`).
 
+`/progress off|brief|detailed` controls how much the agent reports about its
+work: only answers/questions/warnings, major milestones, or frequent meaningful
+updates. It is a communication instruction, not a strict message quota, and
+applies with the next incoming message (including steering a running Claude turn).
+`/toolcalls off|only_file_edits|full` independently enables individual tool-call
+messages with their inputs (long inputs are truncated). File-only mode includes
+native edit/write/patch tools; it cannot detect arbitrary shell scripts that
+write files. Full mode shows supported provider tool events, excluding Telegram
+send itself. These messages describe invocation, not successful completion.
+Tool visibility changes immediately; the live status line remains available.
+Both commands show buttons when called without an argument. Settings persist per
+topic; in the launcher they apply to the next session only. Both default to `off`.
+Side conversations (`/btw`) keep their compact answer/status presentation.
+
 **Model and reasoning effort.** Every new session opens with one provider-specific picker in the
 launcher, and the topic is only created once that's settled. Claude shows its
 models and supported effort levels as separate rows. Codex shows one row of

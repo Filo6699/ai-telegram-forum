@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import type { Progress, Toolcalls } from "./activity.ts";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { cfg } from "./config.ts";
@@ -10,6 +11,8 @@ import type { Provider } from "./provider.ts";
 export type TopicStatus = "active" | "closed";
 
 export interface Topic {
+  progress: Progress;
+  toolcalls: Toolcalls;
   thread_id: number;
   session_id: string | null;
   /** Existing rows predate providers and are migrated as Claude topics. */
@@ -62,6 +65,8 @@ db.exec(`
 
 // Migrate older DBs that predate the usage columns.
 for (const col of [
+  "progress TEXT NOT NULL DEFAULT 'off'",
+  "toolcalls TEXT NOT NULL DEFAULT 'off'",
   "turns INTEGER NOT NULL DEFAULT 0",
   "in_tokens INTEGER NOT NULL DEFAULT 0",
   "out_tokens INTEGER NOT NULL DEFAULT 0",
@@ -155,6 +160,13 @@ export function createTopic(t: {
 
 export function setEffort(threadId: number, effort: Effort): void {
   stmts.setEffort.run(effort, threadId);
+}
+
+export function setActivity(threadId: number, setting: "progress" | "toolcalls", value: Progress | Toolcalls): void {
+  const statement = setting === "progress"
+    ? "UPDATE topics SET progress = ? WHERE thread_id = ?"
+    : "UPDATE topics SET toolcalls = ? WHERE thread_id = ?";
+  db.prepare(statement).run(value, threadId);
 }
 
 export function setModel(threadId: number, model: Model): void {
