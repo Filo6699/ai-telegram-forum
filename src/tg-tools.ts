@@ -114,7 +114,11 @@ export async function runTgSend(
 export function createTgChannel(out: TopicRenderer, cwd: string): TgChannel {
   let sent = 0;
 
-  const send = (args: TgSendArgs): Promise<TgSendResult> => runTgSend(out, cwd, args);
+  const send = async (args: TgSendArgs): Promise<TgSendResult> => {
+    const result = await runTgSend(out, cwd, args);
+    if (tgSendDelivered(result)) sent++;
+    return result;
+  };
 
   const server = createSdkMcpServer({
     name: SERVER_NAME,
@@ -138,9 +142,7 @@ export function createTgChannel(out: TopicRenderer, cwd: string): TgChannel {
             ),
         },
         async (args) => {
-          const result = await send(args);
-          if (tgSendDelivered(result)) sent++;
-          return result;
+          return send(args);
         },
         { alwaysLoad: true },
       ),

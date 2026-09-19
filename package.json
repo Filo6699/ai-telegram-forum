@@ -1,7 +1,7 @@
 {
   "name": "ai-telegram-forum",
   "version": "0.1.0",
-  "description": "Telegram forum bridge for Claude Code and Codex — one topic = one agent session",
+  "description": "Telegram forum bridge for Claude Code, Codex, and OpenRouter — one topic = one agent session",
   "type": "module",
   "license": "MIT",
   "author": "Filo6699",
@@ -31,6 +31,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
+    "test": "node --test --import tsx test/*.test.ts",
     "telegramify": "tsx src/telegramify.ts",
     "codexify": "npm run telegramify -- --provider codex",
     "install-command": "tsx src/install-command.ts",

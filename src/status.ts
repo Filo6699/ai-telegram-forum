@@ -73,6 +73,11 @@ export class TurnStatus {
     this.schedule();
   }
 
+  /** Ask the live line to include newly available provider metadata. */
+  detailChanged(): void {
+    this.schedule();
+  }
+
   private liveText(detail: string | null = null): string {
     const top = [...this.counts.entries()]
       .sort((a, b) => b[1] - a[1])

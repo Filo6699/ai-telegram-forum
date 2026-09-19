@@ -120,7 +120,7 @@ interface CodexUsage {
 export function readCodexUsage(usage: CodexUsage): {
   inTokens: number;
   outTokens: number;
-  costUsd: number;
+  costUsd: number | null;
 } {
   return {
     // Cached reads and cache writes are detail fields within input_tokens, not
@@ -130,6 +130,6 @@ export function readCodexUsage(usage: CodexUsage): {
     outTokens: usage.output_tokens,
     // The CLI reports token counts but not price/cost. Keep accounting honest
     // instead of estimating against a pricing table that can change.
-    costUsd: 0,
+    costUsd: null,
   };
 }

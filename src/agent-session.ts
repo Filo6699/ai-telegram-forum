@@ -24,6 +24,8 @@ import { clearPermissions } from "./permission.ts";
 import type { ServiceTier } from "./preset-config.ts";
 import type { Provider } from "./provider.ts";
 import { TG_SEND_TOOL, tgSendDelivered, type TgChannel, type TgSendArgs } from "./tg-tools.ts";
+import { OpenRouterAgentSession } from "./openrouter-session.ts";
+import type { OpenRouterSettings } from "./openrouter-config.ts";
 
 export interface AgentInput {
   text: string;
@@ -35,6 +37,7 @@ export interface AgentSettings {
   effort: Effort;
   model: Model;
   serviceTier: ServiceTier;
+  openrouter: OpenRouterSettings | null;
 }
 
 export interface AgentTurnResult {
@@ -43,6 +46,7 @@ export interface AgentTurnResult {
   failure: string | null;
   stopped: boolean;
   sent: number;
+  resolvedModel?: string | null;
 }
 
 export interface AgentSideResult extends AgentTurnResult {
@@ -52,6 +56,7 @@ export interface AgentSideResult extends AgentTurnResult {
 export interface AgentSessionHooks {
   beginTurn(): Promise<void>;
   session(id: string): void;
+  model?(id: string): void;
   text(value: string): void;
   tool(name: string, input?: unknown): void | Promise<void>;
   endTurn(result: AgentTurnResult): Promise<void>;
@@ -127,6 +132,7 @@ class ClaudeAgentSession implements AgentSession {
       effort: opts.effort,
       model: opts.model,
       serviceTier: opts.serviceTier,
+      openrouter: opts.openrouter,
     };
   }
 
@@ -330,6 +336,7 @@ class CodexAgentSession implements AgentSession {
       effort: opts.effort,
       model: opts.model,
       serviceTier: opts.serviceTier,
+      openrouter: opts.openrouter,
     };
   }
 
@@ -642,5 +649,9 @@ function appServerToolName(item: any): string | null {
 }
 
 export function createAgentSession(opts: AgentSessionOptions): AgentSession {
-  return opts.provider === "codex" ? new CodexAgentSession(opts) : new ClaudeAgentSession(opts);
+  if (opts.provider === "codex") return new CodexAgentSession(opts);
+  if (opts.provider === "openrouter") {
+    return new OpenRouterAgentSession(opts);
+  }
+  return new ClaudeAgentSession(opts);
 }

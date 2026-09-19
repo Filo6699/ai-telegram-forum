@@ -38,6 +38,10 @@ import {
   type CodexPresetChoice,
 } from "./preset.ts";
 import {
+  openRouterModelPicker,
+  type OpenRouterSettings,
+} from "./openrouter-config.ts";
+import {
   asServiceTier,
   serviceTierGroup,
   serviceTierLabel,
@@ -61,6 +65,7 @@ import { startSweep } from "./sweep.ts";
 import {
   createTopic,
   getTopic,
+  setOpenRouterSettings,
   setCodexSettings,
   setEffort,
   setModel,
@@ -90,10 +95,12 @@ function topicUsageText(t: Topic): string {
     `turns: ${t.turns}\n` +
     `agent: ${providerLabel(t.provider)}\n` +
     `model: ${modelLabel(t.model, defaultModel(t.provider), t.provider)}\n` +
-    `effort: ${effortLabel(t.effort, defaultEffort(t.cwd, t.provider))}\n` +
+    (t.provider === "openrouter"
+      ? `preset: ${t.openrouter_settings?.preset ?? "custom/default"}\n`
+      : `effort: ${effortLabel(t.effort, defaultEffort(t.cwd, t.provider))}\n`) +
     (t.provider === "codex" ? `mode: ${serviceTierLabel(t.service_tier)}\n` : "") +
     `tokens: ${fmt(t.in_tokens)} in / ${fmt(t.out_tokens)} out\n` +
-    `cost: $${t.cost_usd.toFixed(4)}`
+    `cost: ${t.cost_known ? `$${t.cost_usd.toFixed(4)}` : "unavailable"}`
   );
 }
 
@@ -104,16 +111,27 @@ function totalsText(): string {
     provider === "codex" && cfg.codexPresets.length
       ? codexPresetPicker(nextModel, nextEffort, nextServiceTier).selected(null)
       : null;
+  const openrouter =
+    provider === "openrouter"
+      ? openRouterModelPicker(nextOpenRouterSettings, cfg.openrouterModel, cfg.openrouterPresets).selected(null)
+      : null;
   return (
     `📊 *All topics*\n` +
     `topics: ${s.topics} · turns: ${s.turns}\n` +
     `next session agent: ${providerLabel(provider)}\n` +
     (preset ? `next session preset: ${preset.name}\n` : "") +
-    `next session model: ${modelLabel(preset?.model ?? nextModel ?? null, defaultModel(provider), provider)}\n` +
-    `next session effort: ${effortLabel(preset?.effort ?? nextEffort ?? null, defaultEffort(cfg.defaultCwd, provider))}\n` +
+    (openrouter?.settings.preset ? `next session preset: ${openrouter.settings.preset}\n` : "") +
+    `next session model: ${modelLabel(
+      preset?.model ?? openrouter?.settings.model ?? nextModel ?? null,
+      defaultModel(provider),
+      provider,
+    )}\n` +
+    (provider === "openrouter"
+      ? ""
+      : `next session effort: ${effortLabel(preset?.effort ?? nextEffort ?? null, defaultEffort(cfg.defaultCwd, provider))}\n`) +
     (preset ? `next session mode: ${serviceTierLabel(preset.serviceTier)}\n` : "") +
     `tokens: ${fmt(s.in_tokens)} in / ${fmt(s.out_tokens)} out\n` +
-    `cost: $${s.cost_usd.toFixed(4)}`
+    `cost: ${s.cost_known ? `$${s.cost_usd.toFixed(4)}` : "unavailable"}`
   );
 }
 
@@ -128,6 +146,7 @@ let nextToolcalls: Toolcalls = "off";
 let nextModel: Model | undefined;
 let nextServiceTier: ServiceTier | undefined;
 let nextProvider: Provider | undefined;
+let nextOpenRouterSettings: OpenRouterSettings | undefined;
 
 /**
  * Where a `/effort` or `/model` lands. `null` is the launcher — the choice is
@@ -189,6 +208,9 @@ async function applyModel(
   if (t === null) {
     const provider = nextProvider ?? cfg.provider;
     nextModel = model;
+    if (provider === "openrouter") {
+      nextOpenRouterSettings = model ? { model, preset: null } : { model: null };
+    }
     if (announce) {
       await replySilently(
         ctx,
@@ -202,11 +224,47 @@ async function applyModel(
   }
   const s = liveSession(t.thread_id);
   if (s) s.setModel(model);
-  else setModel(t.thread_id, model);
+  else if (t.provider === "openrouter") {
+    setOpenRouterSettings(t.thread_id, model ? { model, preset: null } : { model: null });
+    setModel(t.thread_id, model);
+  } else setModel(t.thread_id, model);
   if (announce) {
     await replySilently(
       ctx,
       `🤖 model: ${modelLabel(model, defaultModel(t.provider), t.provider)}`,
+      { message_thread_id: thread },
+    );
+  }
+}
+
+/** Apply a complete OpenRouter preset or custom setting atomically. */
+async function applyOpenRouterSettings(
+  ctx: any,
+  thread: number | undefined,
+  settings: OpenRouterSettings,
+  announce = true,
+): Promise<void> {
+  const t = await target(ctx, thread);
+  if (t === undefined) return;
+  if (t === null) {
+    nextOpenRouterSettings = { ...settings };
+    nextModel = settings.model ?? undefined;
+    if (announce) {
+      await replySilently(
+        ctx,
+        `🤖 next session: ${settings.model ?? cfg.openrouterModel}${settings.preset ? ` · 🎛️ ${settings.preset}` : ""}`,
+        { message_thread_id: thread },
+      );
+    }
+    return;
+  }
+  const s = liveSession(t.thread_id);
+  if (s) s.setOpenRouterSettings(settings);
+  else setOpenRouterSettings(t.thread_id, settings);
+  if (announce) {
+    await replySilently(
+      ctx,
+      `🤖 model: ${settings.model ?? cfg.openrouterModel}${settings.preset ? ` · 🎛️ ${settings.preset}` : ""}`,
       { message_thread_id: thread },
     );
   }
@@ -251,6 +309,7 @@ async function applyProvider(
   nextModel = undefined;
   nextEffort = undefined;
   nextServiceTier = undefined;
+  nextOpenRouterSettings = undefined;
   if (announce) {
     await replySilently(ctx, `🧠 next session agent: ${providerLabel(provider)}`, {
       message_thread_id: thread,
@@ -357,7 +416,9 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
     const t = await sessionTopic(ctx, thread);
     if (t) {
       const resume =
-        t.provider === "codex"
+        t.provider === "openrouter"
+          ? `OpenRouter history is stored in ${cfg.openrouterHistoryPath}/${t.session_id}.jsonl and resumes automatically`
+          : t.provider === "codex"
           ? `codex resume ${t.session_id}`
           : `claude --resume ${t.session_id}`;
       await replySilently(ctx, `\`\`\`\ncd ${shq(t.cwd)} && ${resume}\n\`\`\``, {
@@ -393,12 +454,20 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
     if (arg) {
       const provider = parseProvider(arg);
       if (!provider) {
-        await replySilently(ctx, "⚠️ unknown agent. Use `claude` or `codex`.", {
+        await replySilently(
+          ctx,
+          `⚠️ unknown agent. Use ${cfg.openrouterEnabled ? "`claude`, `codex`, or `openrouter`" : "`claude` or `codex`"}.`,
+          {
           message_thread_id: thread,
           parse_mode: "Markdown",
-        });
+          },
+        );
       } else {
-        await applyProvider(ctx, thread, provider);
+        if (provider === "openrouter" && !cfg.openrouterEnabled) {
+          await replySilently(ctx, "⚠️ OpenRouter is disabled: set a non-empty OPENROUTER_API_KEY.", {
+            message_thread_id: thread,
+          });
+        } else await applyProvider(ctx, thread, provider);
       }
       return true;
     }
@@ -412,7 +481,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
     void askPick(bot, {
       threadId: thread,
       title: "agent for the next session",
-      groups: [providerGroup(current, cfg.provider)],
+      groups: [providerGroup(current, cfg.provider, cfg.openrouterEnabled)],
     })
       .then(({ picks }) =>
         applyProvider(ctx, thread, asProvider(picks.p ?? null, cfg.provider), false),
@@ -426,6 +495,14 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
     const provider = topic?.provider ?? nextProvider ?? cfg.provider;
     const arg = ctx.message.text.trim().split(/\s+/)[1];
     const isEffort = cmd === "/effort";
+    if (isEffort && provider === "openrouter") {
+      await replySilently(
+        ctx,
+        "⚠️ OpenRouter reasoning is configured in OPENROUTER_PRESETS; choose a preset with `/model`.",
+        { message_thread_id: thread, parse_mode: "Markdown" },
+      );
+      return true;
+    }
     if (arg) {
       const value = isEffort ? parseEffort(arg, provider) : parseModel(arg, provider);
       if (value === undefined) {
@@ -456,6 +533,16 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
             nextCodex?.serviceTier ?? topic?.service_tier ?? null,
           )
         : undefined;
+    const openrouterModels =
+      !isEffort && provider === "openrouter"
+        ? openRouterModelPicker(
+            inLauncher
+              ? nextOpenRouterSettings ?? (nextModel ? { model: nextModel } : null)
+              : topic?.openrouter_settings ?? (topic?.model ? { model: topic.model } : null),
+            cfg.openrouterModel,
+            cfg.openrouterPresets,
+          )
+        : undefined;
     void askPick(bot, {
       threadId: thread,
       title: `${isEffort ? "effort" : "model"} for ${where}`,
@@ -469,15 +556,21 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
           ]
         : [
             codexModels?.group ??
+              openrouterModels?.group ??
               modelGroup(inLauncher ? (nextModel ?? null) : (topic?.model ?? null), provider),
           ],
     })
       .then(({ picks }) => {
         if (isEffort) return applyEffort(ctx, thread, asEffort(picks.e ?? null, provider), false);
         const choice = codexModels?.selected(picks.m ?? null);
-        return choice?.kind === "preset"
-          ? applyCodexPreset(ctx, thread, choice.preset)
-          : applyModel(ctx, thread, choice?.model ?? asModel(picks.m ?? null), false);
+        if (choice) {
+          return choice.kind === "preset"
+            ? applyCodexPreset(ctx, thread, choice.preset)
+            : applyModel(ctx, thread, choice.model, false);
+        }
+        const openrouterChoice = openrouterModels?.selected(picks.o ?? null);
+        if (openrouterChoice) return applyOpenRouterSettings(ctx, thread, openrouterChoice.settings, false);
+        return applyModel(ctx, thread, asModel(picks.m ?? null), false);
       })
       .catch((err) => console.warn(`[${cmd}] applying the picked value failed:`, String(err)));
     return true;
@@ -510,6 +603,10 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
   const local = t ? topicUsageText(t) : totalsText();
 
   const provider = t?.provider ?? nextProvider ?? cfg.provider;
+  if (provider === "openrouter") {
+    await replySilently(ctx, local, { message_thread_id: thread, parse_mode: "Markdown" });
+    return true;
+  }
   // Asking the provider for plan limits can take a few seconds (and may have
   // to start a child), so post the local tally first and fill the rest in.
   const sent = await replySilently(ctx, `${local}\n\n⏳ _checking plan limits…_`, {
@@ -598,11 +695,21 @@ async function launch(
     provider === "codex" && cfg.codexPresets.length
       ? codexPresetPicker(nextModel, nextEffort, nextServiceTier)
       : undefined;
+  const openrouterPicker =
+    provider === "openrouter"
+      ? openRouterModelPicker(
+          nextOpenRouterSettings ?? (nextModel ? { model: nextModel } : null),
+          cfg.openrouterModel,
+          cfg.openrouterPresets,
+        )
+      : undefined;
   const { picks, cancelled, messageId } = await askPick(bot, {
     threadId: cfg.launcherThreadId,
     title: `«${title}»`,
     groups: presetPicker
       ? [presetPicker.group]
+      : openrouterPicker
+        ? [openrouterPicker.group]
       : provider === "codex"
         ? [
             modelGroup(nextModel ?? null, provider),
@@ -616,8 +723,12 @@ async function launch(
   });
   if (cancelled) return;
   const preset = presetPicker?.selected(picks.r ?? null);
-  const effort = preset?.effort ?? asEffort(picks.e ?? null, provider);
-  const model = preset?.model ?? asModel(picks.m ?? null);
+  const openrouterChoice = openrouterPicker?.selected(picks.o ?? null);
+  const openrouterSettings = openrouterChoice?.settings;
+  const effort = provider === "openrouter" ? null : preset?.effort ?? asEffort(picks.e ?? null, provider);
+  const model = provider === "openrouter"
+    ? openrouterSettings?.model ?? null
+    : preset?.model ?? asModel(picks.m ?? null);
   const serviceTier: ServiceTier = preset?.serviceTier ?? asServiceTier(picks.s ?? null);
   const progress = nextProgress;
   const toolcalls = nextToolcalls;
@@ -626,11 +737,21 @@ async function launch(
   nextEffort = undefined;
   nextModel = undefined;
   nextServiceTier = undefined;
+  nextOpenRouterSettings = undefined;
   nextProvider = undefined;
 
   const topic = await ctx.api.createForumTopic(cfg.chatId, title);
   const tid = topic.message_thread_id;
-  createTopic({ threadId: tid, cwd, title, provider, effort, model, serviceTier });
+  createTopic({
+    threadId: tid,
+    cwd,
+    title,
+    provider,
+    effort,
+    model,
+    serviceTier,
+    openrouterSettings: openrouterSettings ?? null,
+  });
   setActivity(tid, "progress", progress);
   setActivity(tid, "toolcalls", toolcalls);
 
@@ -640,8 +761,10 @@ async function launch(
     `→ «${title}»  (cwd: ${cwd})` +
     (preset
       ? `  🎛️ ${preset.name}`
+      : openrouterSettings?.preset
+        ? `  🎛️ ${openrouterSettings.preset}`
       : `  🤖 ${modelLabel(model, defaultModel(provider), provider)}` +
-        `  ⚙️ ${effortLabel(effort, defaultEffort(cwd, provider))}` +
+        (provider === "openrouter" ? "" : `  ⚙️ ${effortLabel(effort, defaultEffort(cwd, provider))}`) +
         (provider === "codex" ? `  🚀 ${serviceTierLabel(serviceTier)}` : ""));
   const posted =
     messageId !== null &&
@@ -693,6 +816,7 @@ async function launch(
     effort,
     model,
     service_tier: serviceTier,
+    openrouter_settings: openrouterSettings ?? null,
   }).send(contentOf(prompt, images));
 }
 
@@ -857,7 +981,7 @@ async function main() {
   await bot.api.setMyCommands([
     { command: "usage", description: "Tokens/cost here (or all in the launcher) + plan limits" },
     { command: "btw", description: "Ask a side question without interrupting the main task" },
-    { command: "provider", description: "Next session agent: Claude or Codex" },
+    { command: "provider", description: "Next session agent: Claude, Codex, or OpenRouter" },
     { command: "effort", description: "Reasoning effort: /effort high, or /effort for buttons" },
     { command: "progress", description: "Progress updates: off, brief, detailed" },
     { command: "toolcalls", description: "Tool calls: off, only_file_edits, full" },

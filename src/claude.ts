@@ -4,31 +4,14 @@ import type { Bot } from "grammy";
 import { cfg } from "./config.ts";
 import type { Effort } from "./effort.ts";
 import type { Model } from "./model.ts";
-import { askPermission, isBlanketAllowed } from "./permission.ts";
+import { authorizeTool } from "./permission.ts";
 import { TG_SEND_TOOL, TG_SYSTEM_PROMPT, type TgChannel } from "./tg-tools.ts";
 
 export interface Usage {
   inTokens: number;
   outTokens: number;
-  costUsd: number;
-}
-
-// Obviously destructive shell patterns rejected even for allowed Bash in "auto"
-// mode. Defense-in-depth, not a sandbox — point the bot at trusted dirs.
-const DANGEROUS_BASH = [
-  /\brm\s+-[a-z]*r[a-z]*f\b/i, // rm -rf and friends
-  /\bmkfs\b/i,
-  /\bdd\b[^\n]*\bof=\/dev\//i,
-  /\s>\s*\/dev\/(sd|nvme|disk)/i,
-  /:\(\)\s*\{\s*:\|:&\s*\}\s*;/, // fork bomb
-  /\bchmod\s+-R\s+0*777\s+\//,
-  /\b(curl|wget)\b[^\n]*\|\s*(sudo\s+)?(sh|bash)\b/i, // curl | sh
-  /\bshutdown\b|\breboot\b|\bhalt\b/i,
-];
-
-function isDangerousBash(input: Record<string, unknown>): boolean {
-  const cmd = typeof input.command === "string" ? input.command : "";
-  return DANGEROUS_BASH.some((re) => re.test(cmd));
+  /** null means the provider did not report a price. */
+  costUsd: number | null;
 }
 
 /** Tools the agent may use without asking. Talking to the user is never gated. */
@@ -48,18 +31,8 @@ function permissionOptions(bot: Bot, threadId: number) {
     permissionMode: "default" as const,
     allowedTools: autoAllowed,
     canUseTool: async (name: string, input: Record<string, unknown>) => {
-      const dangerous = name === "Bash" && isDangerousBash(input);
-      if (!dangerous && (autoAllowed.includes(name) || isBlanketAllowed(threadId, name))) {
-        return { behavior: "allow" as const, updatedInput: input };
-      }
-      const decision = await askPermission(
-        bot,
-        threadId,
-        name,
-        input,
-        dangerous ? "flagged as destructive" : undefined,
-      );
-      return decision === "allow"
+      const allowed = await authorizeTool(bot, threadId, name, input);
+      return allowed
         ? { behavior: "allow" as const, updatedInput: input }
         : { behavior: "deny" as const, message: `Denied by the user over Telegram` };
     },
@@ -118,7 +91,7 @@ export function readUsage(msg: any): Usage {
       (u.cache_read_input_tokens ?? 0) +
       (u.cache_creation_input_tokens ?? 0),
     outTokens: u.output_tokens ?? 0,
-    costUsd: msg.total_cost_usd ?? 0,
+    costUsd: typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : null,
   };
   if (!usage.inTokens && !usage.outTokens) {
     const m = usageFromModels(msg.modelUsage);

@@ -1,6 +1,7 @@
 import { cfg } from "./config.ts";
 import type { PickGroup, PickValue } from "./picker.ts";
 import type { Provider } from "./provider.ts";
+import { normalizeOpenRouterModel } from "./openrouter-model.ts";
 
 /**
  * `null` means "no choice of ours" — the session runs on its provider's model
@@ -36,11 +37,15 @@ const CODEX_MODELS: Known[] = [
 ];
 
 const modelsFor = (provider: Provider): Known[] =>
-  provider === "codex" ? CODEX_MODELS : CLAUDE_MODELS;
+  provider === "codex" ? CODEX_MODELS : provider === "claude" ? CLAUDE_MODELS : [];
 
 /** The model a topic runs on when it has picked none. */
 export const defaultModel = (provider: Provider = cfg.provider): string =>
-  provider === "codex" ? cfg.codexModel : cfg.claudeModel;
+  provider === "codex"
+    ? cfg.codexModel
+    : provider === "openrouter"
+      ? cfg.openrouterModel
+      : cfg.claudeModel;
 
 /** A model id as a human reads it — its display name, or the id itself. */
 const displayName = (id: string, provider?: Provider): string =>
@@ -60,6 +65,7 @@ export function parseModel(raw: string, provider: Provider = cfg.provider): Mode
   const v = raw.trim();
   const lower = v.toLowerCase();
   if (lower === "default" || lower === "reset" || lower === "-") return null;
+  if (provider === "openrouter") return normalizeOpenRouterModel(v) ?? undefined;
   const known = modelsFor(provider).find(
     (m) => m.alias === lower || m.id.toLowerCase() === lower,
   );
@@ -74,9 +80,11 @@ export function parseModel(raw: string, provider: Provider = cfg.provider): Mode
 export const asModel = (v: PickValue): Model => v ?? null;
 
 export const modelUsage = (provider: Provider): string =>
-  `⚠️ unknown model. Use one of: ${modelsFor(provider)
-    .map((m) => m.alias)
-    .join(", ")}, default — or a full model id.`;
+  provider === "openrouter"
+    ? "⚠️ unknown OpenRouter model. Use an id such as `openrouter/free` or a link from openrouter.ai."
+    : `⚠️ unknown model. Use one of: ${modelsFor(provider)
+        .map((m) => m.alias)
+        .join(", ")}, default — or a full model id.`;
 
 /**
  * The known models, tick on the one in force. The provider model from env is the
@@ -85,6 +93,19 @@ export const modelUsage = (provider: Provider): string =>
  */
 export function modelGroup(initial: Model, provider: Provider = cfg.provider): PickGroup {
   const fallback = defaultModel(provider);
+  if (provider === "openrouter") {
+    return {
+      key: "m",
+      options: [
+        { value: fallback, label: fallback },
+        ...(initial && initial !== fallback ? [{ value: initial, label: initial }] : []),
+      ],
+      perRow: 1,
+      initial,
+      fallback,
+      summary: (v) => `🤖 model: ${modelLabel(asModel(v), fallback, provider)}`,
+    };
+  }
   const known = modelsFor(provider).map((m) => ({ value: m.id, label: m.label }));
   const options = known.some((o) => o.value === fallback)
     ? known

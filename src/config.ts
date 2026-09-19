@@ -1,6 +1,8 @@
 import "dotenv/config";
 import { parseCodexPresets, parseDefaultCodexPreset } from "./preset-config.ts";
 import { parseProvider } from "./provider.ts";
+import { parseOpenRouterPresets } from "./openrouter-config.ts";
+import { normalizeOpenRouterModel } from "./openrouter-model.ts";
 
 function req(name: string): string {
   const v = process.env[name];
@@ -41,8 +43,23 @@ const hours = (name: string, fallback: number) =>
   (Number(process.env[name] ?? fallback)) * 3600_000;
 
 const provider = parseProvider(process.env.PROVIDER ?? "claude");
-if (!provider) throw new Error(`PROVIDER must be "claude" or "codex"`);
+if (!provider) throw new Error(`PROVIDER must be "claude", "codex", or "openrouter"`);
 const codexPresets = parseCodexPresets(process.env.CODEX_PRESETS);
+const openrouterApiKey = process.env.OPENROUTER_API_KEY?.trim() ?? "";
+const openrouterEnabled = Boolean(openrouterApiKey);
+const openrouterPresets = parseOpenRouterPresets(process.env.OPENROUTER_PRESETS);
+const openrouterModel = normalizeOpenRouterModel(process.env.OPENROUTER_MODEL?.trim() || "openrouter/free");
+if (!openrouterModel) throw new Error("OPENROUTER_MODEL must be a model id or an openrouter.ai link");
+const openrouterMaxSteps = Number(process.env.OPENROUTER_MAX_STEPS ?? 24);
+const openrouterTurnTimeoutMs = Number(process.env.OPENROUTER_TURN_TIMEOUT_MINUTES ?? 30) * 60_000;
+const openrouterMaxToolOutput = Number(process.env.OPENROUTER_MAX_TOOL_OUTPUT ?? 20_000);
+const openrouterContextWindow = Number(process.env.OPENROUTER_CONTEXT_WINDOW ?? 64_000);
+if (![openrouterMaxSteps, openrouterTurnTimeoutMs, openrouterMaxToolOutput, openrouterContextWindow].every((n) => Number.isFinite(n) && n > 0)) {
+  throw new Error("OpenRouter limits must be positive numbers");
+}
+if (provider === "openrouter" && !openrouterEnabled) {
+  throw new Error("PROVIDER=openrouter requires a non-empty OPENROUTER_API_KEY");
+}
 
 export const cfg = {
   token: req("BOT_TOKEN"),
@@ -58,6 +75,15 @@ export const cfg = {
   // default so one daemon can host topics from both providers.
   claudeModel: process.env.CLAUDE_MODEL ?? process.env.MODEL ?? "claude-opus-4-8",
   codexModel: process.env.CODEX_MODEL ?? "gpt-5.6-sol",
+  openrouterApiKey,
+  openrouterEnabled,
+  openrouterModel,
+  openrouterPresets,
+  openrouterHistoryPath: process.env.OPENROUTER_HISTORY_PATH ?? "./data/openrouter-sessions",
+  openrouterMaxSteps,
+  openrouterTurnTimeoutMs,
+  openrouterMaxToolOutput,
+  openrouterContextWindow,
   codexPresets,
   codexDefaultPreset: parseDefaultCodexPreset(process.env.CODEX_DEFAULT_PRESET, codexPresets),
   // "auto": auto-approve the ALLOWED_TOOLS allowlist, deny everything else,

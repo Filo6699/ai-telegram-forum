@@ -18,6 +18,7 @@ import { isPendingTitle } from "./cwd.ts";
 import {
   addUsage,
   getTopic,
+  setOpenRouterSettings,
   setCodexSettings,
   setEffort,
   setModel,
@@ -27,6 +28,7 @@ import {
 } from "./db.ts";
 import { defaultEffort, effortLabel, type Effort } from "./effort.ts";
 import { defaultModel, modelLabel, type Model } from "./model.ts";
+import type { OpenRouterSettings } from "./openrouter-config.ts";
 import { codexPresetName } from "./preset.ts";
 import { serviceTierLabel, type ServiceTier } from "./preset-config.ts";
 import type { Provider } from "./provider.ts";
@@ -61,6 +63,7 @@ export class TopicSession {
   private turnActive = false;
   private turnEffort: Effort = null;
   private turnModel: Model = null;
+  private turnResolvedModel: string | null = null;
   private turnServiceTier: ServiceTier = null;
   private turnWeeklyBaseline: number | null = null;
   private sideTurns = 0;
@@ -77,6 +80,7 @@ export class TopicSession {
     private effortLevel: Effort = null,
     private modelId: Model = null,
     private serviceTier: ServiceTier = null,
+    private openrouterSettings: OpenRouterSettings | null = null,
   ) {
     this.out = new TopicRenderer(bot.api, cfg.chatId, threadId);
     const channel = createTgChannel(this.out, cwd);
@@ -89,11 +93,17 @@ export class TopicSession {
       effort: effortLevel,
       model: modelId,
       serviceTier,
+      openrouter: openrouterSettings,
       channel,
       hooks: {
         beginTurn: () => this.beginTurn(),
         session: (id) => {
           this.sessionId = id;
+          setSession(this.threadId, id);
+        },
+        model: (id) => {
+          this.turnResolvedModel = id;
+          this.status?.detailChanged();
         },
         text: (value) => this.out.hold(value),
         tool: async (name, input) => {
@@ -128,6 +138,22 @@ export class TopicSession {
   setEffort(level: Effort): void {
     this.effortLevel = level;
     setEffort(this.threadId, level);
+    if (this.provider === "openrouter") {
+      const base = this.openrouterSettings ?? { model: this.modelId };
+      const reasoning =
+        level === null
+          ? undefined
+          : base.reasoning && typeof base.reasoning === "object" && !Array.isArray(base.reasoning)
+            ? { ...(base.reasoning as Record<string, unknown>), effort: level }
+            : { effort: level };
+      this.openrouterSettings = {
+        ...base,
+        preset: null,
+        ...(reasoning === undefined ? {} : { reasoning }),
+        ...(reasoning === undefined ? { reasoning: undefined } : {}),
+      };
+      setOpenRouterSettings(this.threadId, this.openrouterSettings);
+    }
     if (this.turnActive) {
       this.settingsDirty = true;
       return;
@@ -142,6 +168,10 @@ export class TopicSession {
    */
   setModel(model: Model): void {
     this.modelId = model;
+    if (this.provider === "openrouter") {
+      this.openrouterSettings = model ? { model, preset: null } : { model: null };
+      setOpenRouterSettings(this.threadId, this.openrouterSettings);
+    }
     setModel(this.threadId, model);
     if (this.turnActive) {
       this.settingsDirty = true;
@@ -163,6 +193,25 @@ export class TopicSession {
     void this.applySettings();
   }
 
+  /** Apply one complete OpenRouter preset, including its optional parameters. */
+  setOpenRouterSettings(settings: OpenRouterSettings): void {
+    this.openrouterSettings = {
+      ...settings,
+      ...(settings.fallbacks ? { fallbacks: [...settings.fallbacks] } : {}),
+      ...(settings.provider ? { provider: { ...settings.provider } } : {}),
+    };
+    this.modelId = settings.model;
+    this.effortLevel = null;
+    setOpenRouterSettings(this.threadId, this.openrouterSettings);
+    setModel(this.threadId, settings.model);
+    setEffort(this.threadId, null);
+    if (this.turnActive) {
+      this.settingsDirty = true;
+      return;
+    }
+    void this.applySettings();
+  }
+
   private async applySettings(): Promise<void> {
     this.settingsDirty = false;
     await this.agent.applySettings({
@@ -170,6 +219,7 @@ export class TopicSession {
       effort: this.effortLevel,
       model: this.modelId,
       serviceTier: this.serviceTier,
+      openrouter: this.openrouterSettings,
     });
   }
 
@@ -209,15 +259,19 @@ export class TopicSession {
 
     try {
       const result = await this.agent.btw(content, (name) => status.tool(name));
-      // Codex app-server reports side-turn usage. Claude's side_question
+      // Codex and OpenRouter report side-turn usage. Claude's side_question
       // control response currently does not, so don't invent tokens or a turn.
-      if (this.provider === "codex") addUsage(this.threadId, result.usage);
+      if (this.provider === "codex" || this.provider === "openrouter") {
+        addUsage(this.threadId, result.usage);
+      }
       const summary = summarize(
         result.ok && !result.failure,
         status,
         result.usage,
         effort,
-        model,
+        this.provider === "openrouter" && result.resolvedModel
+          ? result.resolvedModel
+          : model,
         this.provider === "codex" ? this.serviceTier : null,
         result.stopped,
         [],
@@ -273,15 +327,11 @@ export class TopicSession {
     this.turnActive = true;
     this.turnEffort = this.effortLevel;
     this.turnModel = this.modelId;
+    this.turnResolvedModel = null;
     this.turnServiceTier = this.serviceTier;
     this.turnWeeklyBaseline = null;
     this.out.clear();
-    this.status = new TurnStatus(
-      this.out,
-      this.provider === "codex"
-        ? () => codexWeeklyPart(this.sessionId, this.turnWeeklyBaseline)
-        : undefined,
-    );
+    this.status = new TurnStatus(this.out, this.statusDetail());
     await this.status.start();
     if (this.provider === "codex") {
       // runStreamed starts only after this hook resolves, so this snapshot
@@ -297,8 +347,11 @@ export class TopicSession {
     // Nothing picked means the turn ran on the provider's resolved default — a
     // real level/model, so each goes in the summary rather than as an absence.
     const effort = this.turnEffort ?? defaultEffort(this.cwd, this.provider);
+    this.turnResolvedModel = result.resolvedModel ?? this.turnResolvedModel;
     const model = modelLabel(
-      this.turnModel ?? defaultModel(this.provider),
+      this.provider === "openrouter"
+        ? this.turnResolvedModel ?? this.turnModel ?? defaultModel(this.provider)
+        : this.turnModel ?? defaultModel(this.provider),
       undefined,
       this.provider,
     );
@@ -342,6 +395,16 @@ export class TopicSession {
     }
   }
 
+  private statusDetail(): (() => Promise<string | null>) | undefined {
+    if (this.provider === "codex") {
+      return () => codexWeeklyPart(this.sessionId, this.turnWeeklyBaseline);
+    }
+    if (this.provider === "openrouter") {
+      return async () => (this.turnResolvedModel ? `🤖 ${this.turnResolvedModel}` : null);
+    }
+    return undefined;
+  }
+
   /** Replace the provisional topic title once the provider can settle it. */
   private async retitle(): Promise<void> {
     if (!this.sessionId) return;
@@ -378,6 +441,8 @@ function summarize(
           `${marker} ${compactMs(status?.elapsedMs ?? 0)}`,
           preset ?? `${model}/${effort}${serviceTier === "fast" ? "/fast" : ""}`,
         ]
+      : provider === "openrouter"
+        ? [`${marker} ${humanMs(status?.elapsedMs ?? 0)}`, `🤖 ${model}`]
       : [marker, humanMs(status?.elapsedMs ?? 0), `🤖 ${model}`, `⚙️ ${effort}`];
   if (provider !== "codex" && serviceTier === "fast") {
     parts.push(`🚀 ${serviceTierLabel(serviceTier)}`);
@@ -388,7 +453,9 @@ function summarize(
   if (provider !== "codex" && (usage.inTokens || usage.outTokens)) {
     parts.push(`${fmtTokens(usage.inTokens)}↑ ${fmtTokens(usage.outTokens)}↓`);
   }
-  if (provider !== "codex" && usage.costUsd > 0) parts.push(`$${usage.costUsd.toFixed(4)}`);
+  if (provider !== "codex" && usage.costUsd !== null && usage.costUsd > 0) {
+    parts.push(`$${usage.costUsd.toFixed(4)}`);
+  }
   parts.push(...extra);
   return parts.join(" · ");
 }
@@ -408,6 +475,7 @@ export function sessionFor(
     effort?: Effort;
     model?: Model;
     service_tier?: ServiceTier;
+    openrouter_settings?: OpenRouterSettings | null;
   },
 ): TopicSession {
   const existing = live.get(topic.thread_id);
@@ -421,6 +489,7 @@ export function sessionFor(
     topic.effort ?? null,
     topic.model ?? null,
     topic.service_tier ?? null,
+    topic.openrouter_settings ?? null,
   );
   live.set(topic.thread_id, s);
   return s;

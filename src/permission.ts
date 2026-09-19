@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { InlineKeyboard, type Bot } from "grammy";
 import { cfg } from "./config.ts";
+import { TG_SEND_TOOL } from "./tg-tools.ts";
 
 export type Decision = "allow" | "deny";
 
@@ -101,6 +102,42 @@ export function askPermission(
         },
       );
   });
+}
+
+const dangerousBash = [
+  /\brm\s+-[a-z]*r[a-z]*f\b/i,
+  /\bmkfs\b/i,
+  /\bdd\b[^\n]*\bof=\/dev\//i,
+  /\s>\s*\/dev\/(sd|nvme|disk)/i,
+  /:\(\)\s*\{\s*:\|:&\s*\}\s*;/,
+  /\bchmod\s+-R\s+0*777\s+\//,
+  /\b(curl|wget)\b[^\n]*\|\s*(sudo\s+)?(sh|bash)\b/i,
+  /\bshutdown\b|\breboot\b|\bhalt\b/i,
+];
+
+const openRouterAutoAllowed = [...cfg.allowedTools, TG_SEND_TOOL];
+
+/** Apply the same single-user permission policy to a direct tool executor. */
+export async function authorizeTool(
+  bot: Bot,
+  threadId: number,
+  name: string,
+  input: Record<string, unknown>,
+): Promise<boolean> {
+  if (cfg.permission === "bypass") return true;
+  const command = typeof input.command === "string" ? input.command : "";
+  const dangerous = name === "Bash" && dangerousBash.some((re) => re.test(command));
+  if (!dangerous && (openRouterAutoAllowed.includes(name) || isBlanketAllowed(threadId, name))) {
+    return true;
+  }
+  const decision = await askPermission(
+    bot,
+    threadId,
+    name,
+    input,
+    dangerous ? "flagged as destructive" : undefined,
+  );
+  return decision === "allow";
 }
 
 function settle(id: string, decision: Decision, note: string): void {

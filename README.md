@@ -4,8 +4,9 @@
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen.svg)](https://nodejs.org)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg)
 
-A tiny broker daemon that bridges a **Telegram forum supergroup** to **Claude Code**
-or **OpenAI Codex**, via their official TypeScript SDKs.
+A tiny broker daemon that bridges a **Telegram forum supergroup** to **Claude Code**,
+**OpenAI Codex**, or **OpenRouter**. Claude and Codex use their native SDKs;
+OpenRouter uses the compatible Chat Completions API with the broker's own tool loop.
 
 **One topic = one agent session.** A dedicated *"New session"* topic acts as a
 launcher: send it a message and the bot spins up a fresh topic + session and
@@ -35,6 +36,7 @@ session id and resume from their own on-disk transcript.
 - Node.js **≥ 22** (uses the built-in `node:sqlite`, no native build step)
 - A CLI login for every provider you intend to use: `claude` for Claude Code,
   `codex login` for Codex. API-key configurations supported by those CLIs work too.
+  OpenRouter is enabled only when `OPENROUTER_API_KEY` is non-empty.
 
 ## Setup
 
@@ -77,12 +79,13 @@ Everything happens by messaging the **New session** topic (or the General topic)
 | `/srv/app bump deps` | new topic, cwd = `/srv/app` |
 
 Then just keep chatting **inside that topic** — each message resumes that
-topic's Claude or Codex session. Writing into a closed topic reopens it.
+topic's Claude, Codex, or OpenRouter session. Writing into a closed topic reopens it.
 
-`PROVIDER=claude|codex` chooses the default for new topics. `/provider codex`
-or `/provider claude` in the launcher changes the next launch only; `/provider`
-shows buttons. A topic remembers its provider and cannot switch later because
-that would abandon its native session history.
+`PROVIDER=claude|codex|openrouter` chooses the default for new topics. `/provider codex`,
+`/provider claude`, or `/provider openrouter` in the launcher changes the next launch
+only; `/provider` shows buttons. OpenRouter is omitted from that picker without an
+`OPENROUTER_API_KEY`. A topic remembers its provider and cannot switch later because
+that would abandon its session history.
 
 **Pictures work too.** Send a photo (or an image sent as a file — JPEG, PNG,
 GIF, WebP) with an optional caption, in the launcher or inside a topic, and the
@@ -189,6 +192,25 @@ Inside a topic it swaps the model on the live session from the next turn on and
 is remembered across an idle shutdown; in the launcher it becomes the next
 Codex launch's **Custom** choice (or pre-selects Claude's model row). The model
 a turn ran on is in its summary line and in `/usage`.
+
+OpenRouter accepts any model id or an OpenRouter model link, including `:free`
+variants. Its picker is made from `OPENROUTER_PRESETS`; a model typed with
+`/model` is still valid when it has no preset. For `openrouter/free`, the
+resolved model returned by OpenRouter is shown in the live status and turn
+summary. Preset parameters are optional and are omitted unless configured:
+
+```dotenv
+OPENROUTER_API_KEY=...
+OPENROUTER_MODEL=openrouter/free
+OPENROUTER_PRESETS={"Free":{"model":"openrouter/free"},"DeepSeek":{"model":"deepseek/deepseek-v4-flash-0731:free","temperature":0.2,"max_tokens":4096,"reasoning":{"effort":"high"},"provider":{"allow_fallbacks":false},"fallbacks":["google/gemini-2.5-flash"]}}
+```
+
+The OpenRouter executor persists an append-only transcript under
+`OPENROUTER_HISTORY_PATH` (default `data/openrouter-sessions`), supports file,
+shell, permission, and Telegram-send tools, and compacts only the
+request context when a model window fills. `/stop` aborts the HTTP request and
+the running shell command where the runtime permits it; the session history is
+kept for the next turn.
 
 `/btw <message>`, inside a session topic, asks a side question without interrupting
 or steering the main task. The broker creates the same ephemeral history fork
@@ -329,7 +351,11 @@ message received during a Codex turn becomes the next turn automatically.
 | `src/preset.ts` | the Codex launch-preset picker |
 | `src/effort.ts` | reasoning-effort buttons and `/effort` |
 | `src/model.ts` | model buttons and `/model` |
-| `src/provider.ts` | Claude/Codex selection and `/provider` |
+| `src/provider.ts` | provider selection and `/provider` |
+| `src/openrouter.ts` | OpenRouter HTTP client, retries, catalog, and usage |
+| `src/openrouter-session.ts` | OpenRouter agent loop and persistent history integration |
+| `src/openrouter-tools.ts` | OpenRouter file, shell, and Telegram tools |
+| `src/openrouter-config.ts` | OpenRouter presets and picker settings |
 | `src/claude.ts` | SDK options: model, effort, permissions, usage accounting |
 | `src/codex.ts` | Codex SDK options, thread/input/event adaptation |
 | `src/codex-app-server.ts` | one-shot requests to Codex's local app-server |
