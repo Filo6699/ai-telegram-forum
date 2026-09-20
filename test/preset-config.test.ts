@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { cfg } from "../src/config.ts";
+import { launchPresetPicker } from "../src/launch-preset.ts";
 import { parseCodexPresets, parseDefaultCodexPreset } from "../src/preset-config.ts";
 
 test("Codex has no built-in presets", () => {
@@ -27,4 +29,15 @@ test("invalid preset effort fails during config loading", () => {
     () => parseCodexPresets('{"Oops":{"model":"gpt-5.6-sol","effort":"huge"}}'),
     /effort must be/,
   );
+});
+
+test("the common launch picker routes an OpenRouter preset to OpenRouter", () => {
+  if (!cfg.openrouterEnabled || !cfg.openrouterPresets.length) return;
+  const picker = launchPresetPicker("codex", undefined, undefined, undefined, null);
+  assert.ok(picker);
+  const option = picker.group.options.find((item) => item.value.startsWith("openrouter:preset:"));
+  assert.ok(option);
+  const choice = picker.selected(option.value);
+  assert.equal(choice.provider, "openrouter");
+  assert.equal(choice.openrouter.preset, cfg.openrouterPresets[0]!.name);
 });

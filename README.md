@@ -163,8 +163,10 @@ npm run telegramify -- --provider codex --session <session-id>
 Defaults and optional picker presets live in `.env`:
 `CLAUDE_MODEL`, `CODEX_MODEL`, `CODEX_PRESETS`, `CODEX_DEFAULT_PRESET`,
 `OPENROUTER_MODEL`, and `OPENROUTER_PRESETS`.
-See [`.env.example`](./.env.example) for examples. OpenRouter appears in the
-provider picker only when its API key is configured.
+When starting a Codex or OpenRouter session, the configured Codex presets and
+OpenRouter presets appear in one picker. Choosing `Free` or `Deepseek` switches
+that new topic to OpenRouter automatically. See [`.env.example`](./.env.example)
+for examples. OpenRouter appears only when its API key is configured.
 
 ## Permissions and stored data
 

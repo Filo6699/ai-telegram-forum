@@ -41,6 +41,7 @@ import {
   openRouterModelPicker,
   type OpenRouterSettings,
 } from "./openrouter-config.ts";
+import { launchPresetPicker } from "./launch-preset.ts";
 import {
   asServiceTier,
   serviceTierGroup,
@@ -686,21 +687,19 @@ async function launch(
   const title = placeholderTitle(prompt || "image");
   const provider = nextProvider ?? cfg.provider;
 
-  // Nothing exists yet: the model and the effort are chosen first — in one
-  // picker, so a launch costs one message and one wait — and only then is the
-  // topic created. An untouched picker falls through in seconds, so a launch
-  // nobody answers still starts, but once the user reaches for a button the
-  // launch waits for them to finish.
+  // Nothing exists yet: the provider, model, and effort are chosen first — in
+  // one picker, so a launch costs one message and one wait — and only then is
+  // the topic created. An untouched picker falls through in seconds, so a
+  // launch nobody answers still starts, but once the user reaches for a button
+  // the launch waits for them to finish.
   const presetPicker =
-    provider === "codex" && cfg.codexPresets.length
-      ? codexPresetPicker(nextModel, nextEffort, nextServiceTier)
-      : undefined;
-  const openrouterPicker =
-    provider === "openrouter"
-      ? openRouterModelPicker(
+    provider === "codex" || provider === "openrouter"
+      ? launchPresetPicker(
+          provider,
+          nextModel,
+          nextEffort,
+          nextServiceTier,
           nextOpenRouterSettings ?? (nextModel ? { model: nextModel } : null),
-          cfg.openrouterModel,
-          cfg.openrouterPresets,
         )
       : undefined;
   const { picks, cancelled, messageId } = await askPick(bot, {
@@ -708,8 +707,6 @@ async function launch(
     title: `«${title}»`,
     groups: presetPicker
       ? [presetPicker.group]
-      : openrouterPicker
-        ? [openrouterPicker.group]
       : provider === "codex"
         ? [
             modelGroup(nextModel ?? null, provider),
@@ -722,14 +719,20 @@ async function launch(
     allowCancel: true,
   });
   if (cancelled) return;
-  const preset = presetPicker?.selected(picks.r ?? null);
-  const openrouterChoice = openrouterPicker?.selected(picks.o ?? null);
-  const openrouterSettings = openrouterChoice?.settings;
-  const effort = provider === "openrouter" ? null : preset?.effort ?? asEffort(picks.e ?? null, provider);
-  const model = provider === "openrouter"
+  const launchChoice = presetPicker?.selected(picks.r ?? null);
+  const selectedProvider = launchChoice?.provider ?? provider;
+  const preset = launchChoice?.provider === "codex" ? launchChoice.codex : undefined;
+  const openrouterSettings =
+    launchChoice?.provider === "openrouter" ? launchChoice.openrouter : undefined;
+  const effort = selectedProvider === "openrouter"
+    ? null
+    : preset?.effort ?? asEffort(picks.e ?? null, selectedProvider);
+  const model = selectedProvider === "openrouter"
     ? openrouterSettings?.model ?? null
     : preset?.model ?? asModel(picks.m ?? null);
-  const serviceTier: ServiceTier = preset?.serviceTier ?? asServiceTier(picks.s ?? null);
+  const serviceTier: ServiceTier = selectedProvider === "codex"
+    ? preset?.serviceTier ?? asServiceTier(picks.s ?? null)
+    : null;
   const progress = nextProgress;
   const toolcalls = nextToolcalls;
   nextProgress = "off";
@@ -746,7 +749,7 @@ async function launch(
     threadId: tid,
     cwd,
     title,
-    provider,
+    provider: selectedProvider,
     effort,
     model,
     serviceTier,
@@ -760,12 +763,12 @@ async function launch(
   const line =
     `→ «${title}»  (cwd: ${cwd})` +
     (preset
-      ? `  🎛️ ${preset.name}`
+      ? `  ⚙️ Codex · ${preset.name}`
       : openrouterSettings?.preset
-        ? `  🎛️ ${openrouterSettings.preset}`
-      : `  🤖 ${modelLabel(model, defaultModel(provider), provider)}` +
-        (provider === "openrouter" ? "" : `  ⚙️ ${effortLabel(effort, defaultEffort(cwd, provider))}`) +
-        (provider === "codex" ? `  🚀 ${serviceTierLabel(serviceTier)}` : ""));
+        ? `  🌐 OpenRouter · ${openrouterSettings.preset}`
+      : `  🤖 ${modelLabel(model, defaultModel(selectedProvider), selectedProvider)}` +
+        (selectedProvider === "openrouter" ? "" : `  ⚙️ ${effortLabel(effort, defaultEffort(cwd, selectedProvider))}`) +
+        (selectedProvider === "codex" ? `  🚀 ${serviceTierLabel(serviceTier)}` : ""));
   const posted =
     messageId !== null &&
     (await ctx.api
@@ -812,7 +815,7 @@ async function launch(
     thread_id: tid,
     cwd,
     session_id: null,
-    provider,
+    provider: selectedProvider,
     effort,
     model,
     service_tier: serviceTier,
