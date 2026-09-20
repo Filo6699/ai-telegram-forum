@@ -699,7 +699,9 @@ async function launch(
           nextModel,
           nextEffort,
           nextServiceTier,
-          nextOpenRouterSettings ?? (nextModel ? { model: nextModel } : null),
+          provider === "openrouter"
+            ? nextOpenRouterSettings ?? (nextModel ? { model: nextModel } : null)
+            : nextOpenRouterSettings,
         )
       : undefined;
   const { picks, cancelled, messageId } = await askPick(bot, {
