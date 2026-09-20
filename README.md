@@ -9,6 +9,10 @@ run commands, and send files back to the chat. You can also continue an existing
 Claude Code or Codex terminal session in Telegram. Access is limited to one
 Telegram user.
 
+<img src="docs/screenshots/session.png" alt="A session in Materialgram showing the task, Cancel button, usage summary, and agent's reply" width="640">
+
+An actual session in Materialgram: the agent updating this README.
+
 ## Installation
 
 ### 1. Prepare the machine
@@ -97,6 +101,8 @@ PROJECTS={"myrepo":"/home/you/projects/myrepo"}
 
 The third uses an absolute path. The new topic remembers the directory, so you
 only need the prefix when starting a session.
+
+![A launcher message with a project path and the bot's link to the new session topic, shown in Materialgram](docs/screenshots/launcher.png)
 
 Within a topic, send messages, photos, or files. Images go to the agent as
 images; other attachments are saved locally and passed as file paths. The agent
