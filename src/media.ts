@@ -1,5 +1,6 @@
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { extname, isAbsolute, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { Api } from "grammy";
 import type { Message } from "grammy/types";
 import { cfg } from "./config.ts";
@@ -57,13 +58,25 @@ export async function fetchImage(
 
 /** Fetch a Telegram file's bytes, plus the remote path Telegram named it by. */
 async function download(api: Api, fileId: string): Promise<{ buf: Buffer; filePath: string }> {
-  const file = await api.getFile(fileId);
-  if (!file.file_path) throw new Error("Telegram returned no file_path");
-  const res = await fetch(
-    `https://api.telegram.org/file/bot${cfg.token}/${file.file_path}`,
-  );
-  if (!res.ok) throw new Error(`downloading the file failed: HTTP ${res.status}`);
-  return { buf: Buffer.from(await res.arrayBuffer()), filePath: file.file_path };
+  // One initial attempt, then up to ten retries, one second apart.
+  for (let retries = 0; ; retries++) {
+    try {
+      const file = await api.getFile(fileId);
+      if (!file.file_path) throw new Error("Telegram returned no file_path");
+      const res = await fetch(
+        `https://api.telegram.org/file/bot${cfg.token}/${file.file_path}`,
+      );
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => {});
+        throw new Error(`downloading the file failed: HTTP ${res.status}`);
+      }
+      return { buf: Buffer.from(await res.arrayBuffer()), filePath: file.file_path };
+    } catch (error) {
+      if (retries >= 10) throw error;
+      console.warn(`[media] File download failed; retry ${retries + 1}/10 in 1s`);
+      await delay(1_000);
+    }
+  }
 }
 
 /** A non-image attachment, saved where the agent can open it. */
