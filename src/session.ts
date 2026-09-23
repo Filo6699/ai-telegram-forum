@@ -111,6 +111,9 @@ export class TopicSession {
           const text = toolcallText(getTopic(this.threadId)?.toolcalls ?? "off", name, input);
           if (text) await this.out.sendText(text);
         },
+        plan: async (text) => {
+          await this.out.sendText(text);
+        },
         endTurn: (result) => this.endTurn(result),
       },
     });
@@ -367,6 +370,7 @@ export class TopicSession {
     if (result.sent === 0) await this.out.send();
     else this.out.clear();
     if (result.failure) await this.out.sendText(result.failure);
+    if (result.planResult) await this.out.sendText(result.planResult);
 
     addUsage(this.threadId, result.usage);
     if (this.sessionId) setSession(this.threadId, this.sessionId);

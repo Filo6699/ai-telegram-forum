@@ -110,6 +110,10 @@ images; other attachments are saved locally and passed as file paths. The agent
 can send screenshots, documents, and other files back. A live status message
 shows tool activity while it works.
 
+When Codex creates a task plan, the topic receives the initial checklist. At
+the end of that turn it receives the same checklist with completed steps marked
+and the elapsed time from the start of the turn when each step was completed.
+
 ### Commands
 
 - `/provider` — choose Claude, Codex, or OpenRouter for the next session.

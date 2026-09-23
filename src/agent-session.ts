@@ -15,6 +15,7 @@ import {
   type CodexInput,
 } from "./codex.ts";
 import { CodexAppServerClient, type AppServerNotification } from "./codex-app-server-client.ts";
+import { CodexTurnPlan } from "./codex-plan.ts";
 import { cfg } from "./config.ts";
 import { PENDING_TITLE_MARK } from "./cwd.ts";
 import type { Effort } from "./effort.ts";
@@ -47,6 +48,7 @@ export interface AgentTurnResult {
   stopped: boolean;
   sent: number;
   resolvedModel?: string | null;
+  planResult?: string | null;
 }
 
 export interface AgentSideResult extends AgentTurnResult {
@@ -59,6 +61,7 @@ export interface AgentSessionHooks {
   model?(id: string): void;
   text(value: string): void;
   tool(name: string, input?: unknown): void | Promise<void>;
+  plan(text: string): Promise<void>;
   endTurn(result: AgentTurnResult): Promise<void>;
 }
 
@@ -328,6 +331,7 @@ class CodexAgentSession implements AgentSession {
   private stopped = false;
   private sent = 0;
   private failure: string | null = null;
+  private turnPlan: CodexTurnPlan | null = null;
   private settings: AgentSettings;
 
   constructor(private opts: AgentSessionOptions) {
@@ -437,6 +441,7 @@ class CodexAgentSession implements AgentSession {
     this.stopped = false;
     this.sent = 0;
     this.failure = null;
+    this.turnPlan = new CodexTurnPlan(Date.now());
     await this.opts.hooks.beginTurn();
   }
 
@@ -447,10 +452,12 @@ class CodexAgentSession implements AgentSession {
       failure: this.failure,
       stopped: this.stopped,
       sent: this.sent,
+      planResult: this.turnPlan?.finalText(),
     };
     this.turnActive = false;
     this.stopped = false;
     this.failure = null;
+    this.turnPlan = null;
     await this.opts.hooks.endTurn(result);
   }
 
@@ -558,6 +565,13 @@ class CodexAgentSession implements AgentSession {
                 failure ??= `⚠️ Telegram delivery failed: ${String(err)}`;
               }),
           );
+        }
+      } else if (event.method === "turn/plan/updated" && options.deliverTelegram) {
+        const initial = this.turnPlan?.update(params.plan);
+        if (initial) {
+          deliveries.push(this.opts.hooks.plan(initial).catch((err) => {
+            console.warn("[plan] initial delivery failed:", String(err));
+          }));
         }
       } else if (event.method === "thread/tokenUsage/updated") {
         const last = params.tokenUsage?.last;
