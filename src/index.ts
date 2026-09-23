@@ -66,8 +66,10 @@ import { startSweep } from "./sweep.ts";
 import {
   createTopic,
   getTopic,
+  getDefaultProgress,
   setOpenRouterSettings,
   setCodexSettings,
+  setDefaultProgress,
   setEffort,
   setModel,
   setStatus,
@@ -142,7 +144,7 @@ function totalsText(): string {
  * pre-selection.
  */
 let nextEffort: Effort | undefined;
-let nextProgress: Progress = "off";
+let defaultProgress: Progress = getDefaultProgress();
 let nextToolcalls: Toolcalls = "off";
 let nextModel: Model | undefined;
 let nextServiceTier: ServiceTier | undefined;
@@ -375,10 +377,13 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
       await replySilently(ctx, "⚠️ Use this command in a session topic or the launcher.", { message_thread_id: thread });
       return true;
     }
-    const current = topic?.[setting] ?? (setting === "progress" ? nextProgress : nextToolcalls);
+    const current = topic?.[setting] ?? (setting === "progress" ? defaultProgress : nextToolcalls);
     const apply = (value: string) => {
       if (launcher) {
-        if (setting === "progress") nextProgress = value as Progress;
+        if (setting === "progress") {
+          defaultProgress = value as Progress;
+          setDefaultProgress(defaultProgress);
+        }
         else nextToolcalls = value as Toolcalls;
       } else setActivity(thread!, setting, value as Progress | Toolcalls);
     };
@@ -386,15 +391,24 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
     if (arg) {
       if ((values as readonly string[]).includes(arg)) {
         apply(arg);
-        await replySilently(ctx, `${setting}: ${arg}${launcher ? " (next session)" : ""}`, { message_thread_id: thread });
+        const scope = launcher
+          ? setting === "progress" ? " (default for new sessions)" : " (next session)"
+          : "";
+        await replySilently(ctx, `${setting}: ${arg}${scope}`, { message_thread_id: thread });
       } else await replySilently(ctx, `Usage: ${cmd} ${values.join(" | ")}`, { message_thread_id: thread });
     } else {
       void askPick(bot, {
         threadId: thread,
-        title: `${setting} for ${launcher ? "the next session" : "this topic"}`,
+        title: launcher
+          ? setting === "progress" ? "progress default for new sessions" : "toolcalls for the next session"
+          : `${setting} for this topic`,
         allowCancel: true,
         groups: [{ key: "a", options: values.map(value => ({ value, label: value })), perRow: 3,
-          initial: current, fallback: "off", summary: value => `${setting}: ${value}` }],
+          initial: current,
+          fallback: "off",
+          summary: value => launcher && setting === "progress"
+            ? `progress default for new sessions: ${value}`
+            : `${setting}: ${value}` }],
       }).then(({ picks, cancelled }) => {
         if (!cancelled) apply(picks.a ?? current);
       }).catch(err => console.warn(`[${setting}] picker failed:`, String(err)));
@@ -735,9 +749,8 @@ async function launch(
   const serviceTier: ServiceTier = selectedProvider === "codex"
     ? preset?.serviceTier ?? asServiceTier(picks.s ?? null)
     : null;
-  const progress = nextProgress;
+  const progress = defaultProgress;
   const toolcalls = nextToolcalls;
-  nextProgress = "off";
   nextToolcalls = "off";
   nextEffort = undefined;
   nextModel = undefined;

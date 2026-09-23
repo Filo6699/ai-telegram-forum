@@ -123,13 +123,16 @@ shows tool activity while it works.
   across topics. Codex allowance estimates in turn summaries are approximate.
 - `/resume` — get the command to continue a Claude or Codex session in a terminal.
 - `/id` — show the session ID.
-- `/progress off|brief|detailed` — control the agent's progress messages.
+- `/progress off|brief|detailed` — set progress messages. In the launcher,
+  this is the persistent default for new sessions; inside a topic, it changes
+  only that topic.
 - `/toolcalls off|only_file_edits|full` — control separate tool-call messages.
 
 Model and effort changes apply from the next turn and persist in that topic.
 In the launcher, they apply only to the next session. Use `/model default` or
-`/effort default` to reset them. Progress and tool-call messages both default to
-`off`; the live status message still appears.
+`/effort default` to reset them. Progress defaults to `off`; its launcher
+setting is stored across restarts. Tool-call messages also default to `off`,
+and the live status message still appears.
 
 ### Continue a terminal session in Telegram
 

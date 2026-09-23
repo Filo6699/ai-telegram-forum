@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import type { Progress, Toolcalls } from "./activity.ts";
+import { progressLevels, type Progress, type Toolcalls } from "./activity.ts";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { cfg } from "./config.ts";
@@ -66,6 +66,10 @@ db.exec(`
     out_tokens    INTEGER NOT NULL DEFAULT 0,
     cost_usd      REAL    NOT NULL DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `);
 
 // Migrate older DBs that predate the usage columns.
@@ -91,6 +95,10 @@ for (const col of [
 }
 
 const stmts = {
+  getSetting: db.prepare("SELECT value FROM settings WHERE key = ?"),
+  setSetting: db.prepare(
+    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  ),
   get: db.prepare("SELECT * FROM topics WHERE thread_id = ?"),
   bySession: db.prepare("SELECT * FROM topics WHERE provider = ? AND session_id = ?"),
   insert: db.prepare(
@@ -182,6 +190,17 @@ export function setActivity(threadId: number, setting: "progress" | "toolcalls",
     ? "UPDATE topics SET progress = ? WHERE thread_id = ?"
     : "UPDATE topics SET toolcalls = ? WHERE thread_id = ?";
   db.prepare(statement).run(value, threadId);
+}
+
+export function getDefaultProgress(): Progress {
+  const row = stmts.getSetting.get("default_progress") as { value?: unknown } | undefined;
+  return typeof row?.value === "string" && (progressLevels as readonly string[]).includes(row.value)
+    ? row.value as Progress
+    : "off";
+}
+
+export function setDefaultProgress(value: Progress): void {
+  stmts.setSetting.run("default_progress", value);
 }
 
 export function setModel(threadId: number, model: Model): void {
