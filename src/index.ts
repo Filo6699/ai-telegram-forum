@@ -1,4 +1,5 @@
-import { Bot, InlineKeyboard } from "grammy";
+import { Bot, HttpError, InlineKeyboard } from "grammy";
+import { setTimeout as delay } from "node:timers/promises";
 import { progressLevels, toolcallModes, type Progress, type Toolcalls } from "./activity.ts";
 import { setActivity } from "./db.ts";
 import { cfg } from "./config.ts";
@@ -78,6 +79,9 @@ import {
 } from "./db.ts";
 
 const bot = new Bot(cfg.token);
+
+const TOPIC_CREATE_ATTEMPTS = 5;
+const TOPIC_CREATE_RETRY_DELAY_MS = 2_000;
 
 /** Replies produced synchronously from an inbound update do not need to buzz
  * the phone the user is already holding. Delayed agent output stays audible. */
@@ -758,7 +762,21 @@ async function launch(
   nextOpenRouterSettings = undefined;
   nextProvider = undefined;
 
-  const topic = await ctx.api.createForumTopic(cfg.chatId, title);
+  let topic;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      topic = await ctx.api.createForumTopic(cfg.chatId, title);
+      break;
+    } catch (err) {
+      if (!(err instanceof HttpError) || attempt >= TOPIC_CREATE_ATTEMPTS) throw err;
+      console.warn(
+        `[launch] createForumTopic failed; retry ${attempt}/${TOPIC_CREATE_ATTEMPTS - 1} ` +
+          `in ${TOPIC_CREATE_RETRY_DELAY_MS}ms:`,
+        String(err),
+      );
+      await delay(TOPIC_CREATE_RETRY_DELAY_MS);
+    }
+  }
   const tid = topic.message_thread_id;
   createTopic({
     threadId: tid,
