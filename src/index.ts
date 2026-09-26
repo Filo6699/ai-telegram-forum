@@ -986,6 +986,18 @@ const mediaGroups = new MediaGroupCollector<any>(500, (sources) => {
 });
 
 bot.on("message", async (ctx) => {
+  // setChatPhoto always creates a service message. Remove our own updates so
+  // the five-minute battery avatar does not fill the forum's message history.
+  if (
+    ctx.chat.id === cfg.chatId &&
+    ctx.message.new_chat_photo &&
+    ctx.from?.id === bot.botInfo.id
+  ) {
+    await ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id).catch((err) => {
+      console.warn("[avatar] couldn't delete photo update:", String(err));
+    });
+    return;
+  }
   if (!mine(ctx)) return;
   const groupId = ctx.message.media_group_id;
   if (groupId) {

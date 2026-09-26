@@ -97,6 +97,12 @@ inverted. The 21 images are generated in advance from the chat's original photo,
 so each timer run only reads the battery and uploads the matching image when
 the rounded level changes.
 
+Telegram creates a service message for every chat photo change. The running
+broker deletes the bot's own photo-change messages as soon as it receives them;
+this requires the bot's **Delete Messages** administrator permission. Telegram
+does not offer a silent option for changing a chat photo, so a push notification
+may still arrive before the message is removed.
+
 The bot must be an administrator with **Change Group Info** permission. To
 regenerate the images after replacing `assets/battery-avatar/source.jpg`, install
 Pillow (`python3 -m pip install Pillow`) and run
