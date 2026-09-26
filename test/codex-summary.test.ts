@@ -143,10 +143,79 @@ test("Codex quota credits discount cached input and apply fast mode", () => {
   assert.equal(estimateCodexCredits(usage, "gpt-6-sol", "fast"), 97.5);
   assert.equal(estimateCodexCredits(usage, "gpt-6-luna", null), 1.95);
   assert.equal(estimateCodexCredits(usage, "gpt-6-luna", "fast"), 4.875);
+  assert.equal(estimateCodexCredits(usage, "gpt-5.4", "fast"), null);
   assert.equal(estimateCodexWeeklyPercent(85), 1);
   assert.equal(formatCodexWeeklyPercent(0.824), "0.8%");
   assert.equal(formatCodexWeeklyPercent(0.01), "0.01%");
   assert.equal(formatCodexWeeklyPercent(0.02), "0.02%");
+});
+
+test("Codex rollout prices each turn at its persisted tier when native tier is absent", () => {
+  const lines = [
+    { type: "turn_context", payload: { turn_id: "standard-turn", model: "gpt-6-sol" } },
+    {
+      type: "event_msg",
+      payload: { type: "token_count", info: { last_token_usage: { input_tokens: 1_000_000 } } },
+    },
+    { type: "turn_context", payload: { turn_id: "fast-turn", model: "gpt-6-sol" } },
+    {
+      type: "event_msg",
+      payload: { type: "token_count", info: { last_token_usage: { input_tokens: 1_000_000 } } },
+    },
+  ].map((line) => JSON.stringify(line)).join("\n");
+  const parsed = parseCodexRollout(lines, {
+    turnTiers: new Map([["standard-turn", "default"], ["fast-turn", "fast"]]),
+  });
+
+  assert.equal(parsed.usage?.estimatedWeeklyPercent, estimateCodexWeeklyPercent(175));
+  assert.deepEqual(parsed.untrackedTurnIds, []);
+});
+
+test("old Codex turns use the topic tier and pass it to child agents", () => {
+  const lines = [
+    { type: "turn_context", payload: { turn_id: "old-turn", model: "gpt-6-luna" } },
+    {
+      type: "event_msg",
+      payload: { type: "token_count", info: { last_token_usage: { input_tokens: 1_000_000 } } },
+    },
+    {
+      type: "event_msg",
+      payload: { type: "item_completed", item: { type: "CollabAgentToolCall", receiver_thread_ids: ["child"] } },
+    },
+  ].map((line) => JSON.stringify(line)).join("\n");
+  const parsed = parseCodexRollout(lines, { fallbackTier: "fast" });
+
+  assert.equal(parsed.usage?.estimatedWeeklyPercent, estimateCodexWeeklyPercent(6.25));
+  assert.deepEqual(parsed.untrackedTurnIds, ["old-turn"]);
+  assert.equal(parsed.childServiceTiers.get("child"), "fast");
+});
+
+test("Codex's native priority tier is treated as fast", () => {
+  const lines = [
+    { type: "turn_context", payload: { turn_id: "priority-turn", model: "gpt-6-luna", service_tier: "priority" } },
+    {
+      type: "event_msg",
+      payload: { type: "token_count", info: { last_token_usage: { input_tokens: 1_000_000 } } },
+    },
+  ].map((line) => JSON.stringify(line)).join("\n");
+  const parsed = parseCodexRollout(lines);
+
+  assert.equal(parsed.usage?.estimatedWeeklyPercent, estimateCodexWeeklyPercent(6.25));
+  assert.deepEqual(parsed.untrackedTurnIds, []);
+});
+
+test("an explicit native null tier stays standard even with a fast topic fallback", () => {
+  const lines = [
+    { type: "turn_context", payload: { turn_id: "standard-turn", model: "gpt-6-luna", service_tier: null } },
+    {
+      type: "event_msg",
+      payload: { type: "token_count", info: { last_token_usage: { input_tokens: 1_000_000 } } },
+    },
+  ].map((line) => JSON.stringify(line)).join("\n");
+  const parsed = parseCodexRollout(lines, { fallbackTier: "fast" });
+
+  assert.equal(parsed.usage?.estimatedWeeklyPercent, estimateCodexWeeklyPercent(2.5));
+  assert.deepEqual(parsed.untrackedTurnIds, []);
 });
 
 test("Codex weekly summary shows this turn before the cumulative session", async () => {

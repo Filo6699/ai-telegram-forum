@@ -1,11 +1,15 @@
 import { fetchCodexSessionUsage } from "./codex-session-usage.ts";
 import { formatCodexWeeklyPercent } from "./codex-quota.ts";
+import type { ServiceTier } from "./preset-config.ts";
 
 /** Raw estimated session spend, used to take a per-turn baseline. */
-export async function codexWeeklyPercent(sessionId: string | null): Promise<number | null> {
+export async function codexWeeklyPercent(
+  sessionId: string | null,
+  fallbackTier: ServiceTier = null,
+): Promise<number | null> {
   if (!sessionId) return null;
   try {
-    return (await fetchCodexSessionUsage(sessionId))?.estimatedWeeklyPercent ?? null;
+    return (await fetchCodexSessionUsage(sessionId, fallbackTier))?.estimatedWeeklyPercent ?? null;
   } catch (err) {
     console.warn("[summary] Codex session usage failed:", String(err));
     return null;
@@ -26,8 +30,9 @@ export function formatCodexWeeklyPart(
 export async function codexWeeklyPart(
   sessionId: string | null,
   turnBaseline: number | null = null,
+  fallbackTier: ServiceTier = null,
 ): Promise<string | null> {
-  const total = await codexWeeklyPercent(sessionId);
+  const total = await codexWeeklyPercent(sessionId, fallbackTier);
   if (total === null) return null;
   return formatCodexWeeklyPart(total, turnBaseline);
 }
@@ -36,7 +41,8 @@ export async function codexWeeklyPart(
 export async function codexSummaryParts(
   sessionId: string | null,
   turnBaseline: number | null = null,
+  fallbackTier: ServiceTier = null,
 ): Promise<string[]> {
-  const weekly = await codexWeeklyPart(sessionId, turnBaseline);
+  const weekly = await codexWeeklyPart(sessionId, turnBaseline, fallbackTier);
   return weekly ? [weekly] : [];
 }

@@ -70,6 +70,12 @@ db.exec(`
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS codex_turn_tiers (
+    session_id TEXT NOT NULL,
+    turn_id    TEXT NOT NULL,
+    service_tier TEXT NOT NULL CHECK (service_tier IN ('default', 'fast')),
+    PRIMARY KEY (session_id, turn_id)
+  );
 `);
 
 // Migrate older DBs that predate the usage columns.
@@ -140,6 +146,17 @@ const stmts = {
             COALESCE(SUM(cost_usd), 0) AS cost_usd
             , MIN(cost_known) AS cost_known
        FROM topics`,
+  ),
+  setCodexTurnTier: db.prepare(
+    `INSERT INTO codex_turn_tiers (session_id, turn_id, service_tier)
+     VALUES (?, ?, ?)
+     ON CONFLICT(session_id, turn_id) DO UPDATE SET service_tier = excluded.service_tier`,
+  ),
+  backfillCodexTurnTier: db.prepare(
+    "INSERT OR IGNORE INTO codex_turn_tiers (session_id, turn_id, service_tier) VALUES (?, ?, ?)",
+  ),
+  codexTurnTiers: db.prepare(
+    "SELECT turn_id, service_tier FROM codex_turn_tiers WHERE session_id = ?",
   ),
 };
 
@@ -215,6 +232,28 @@ export function setCodexSettings(
   serviceTier: ServiceTier,
 ): void {
   stmts.setCodexSettings.run(model, effort, serviceTier, threadId);
+}
+
+/** Remember the tier used for each turn; recent Codex rollouts omit it. */
+export function recordCodexTurnTier(
+  sessionId: string,
+  turnId: string,
+  serviceTier: Exclude<ServiceTier, null>,
+): void {
+  stmts.setCodexTurnTier.run(sessionId, turnId, serviceTier);
+}
+
+export function backfillCodexTurnTier(
+  sessionId: string,
+  turnId: string,
+  serviceTier: Exclude<ServiceTier, null>,
+): void {
+  stmts.backfillCodexTurnTier.run(sessionId, turnId, serviceTier);
+}
+
+export function codexTurnTiers(sessionId: string): Map<string, ServiceTier> {
+  const rows = stmts.codexTurnTiers.all(sessionId) as { turn_id: string; service_tier: ServiceTier }[];
+  return new Map(rows.map((row) => [row.turn_id, row.service_tier]));
 }
 
 export function setOpenRouterSettings(

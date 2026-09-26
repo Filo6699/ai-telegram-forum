@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { codexRequest } from "./codex-app-server.ts";
+import { backfillCodexTurnTier, codexTurnTiers } from "./db.ts";
 import {
   estimateCodexCredits,
   estimateCodexWeeklyPercent,
@@ -25,7 +26,8 @@ interface RolloutLine {
   payload?: {
     type?: string;
     model?: string | null;
-    service_tier?: ServiceTier;
+    turn_id?: string;
+    service_tier?: string | null;
     item?: {
       type?: string;
       receiver_thread_ids?: unknown;
@@ -41,6 +43,8 @@ interface RolloutLine {
 export interface ParsedCodexRollout {
   usage: CodexSessionUsage | null;
   childThreadIds: string[];
+  childServiceTiers: Map<string, ServiceTier>;
+  untrackedTurnIds: string[];
 }
 
 export interface CodexSessionUsage {
@@ -49,15 +53,33 @@ export interface CodexSessionUsage {
   estimatedWeeklyPercent: number | null;
 }
 
+interface ParseOptions {
+  turnTiers?: ReadonlyMap<string, ServiceTier>;
+  /** Best effort for turns recorded before this broker tracked their tier. */
+  fallbackTier?: ServiceTier;
+}
+
+const nativeServiceTier = (value: string | null | undefined): Exclude<ServiceTier, null> | undefined =>
+  value === "fast" || value === "priority"
+    ? "fast"
+    : value === "default" || value === null
+      ? "default"
+      : undefined;
+
 class SessionUsageParser {
   private model: string | null = null;
-  private serviceTier: ServiceTier = null;
+  private serviceTier: ServiceTier;
   private totalTokens = 0;
   private estimatedCredits = 0;
   private pricedResponses = 0;
   private contextUsedPercent: number | null = null;
   private responses = 0;
-  private children = new Set<string>();
+  private children = new Map<string, ServiceTier>();
+  private untrackedTurns = new Set<string>();
+
+  constructor(private options: ParseOptions = {}) {
+    this.serviceTier = options.fallbackTier ?? null;
+  }
 
   line(line: string): void {
     const hasUsage = line.includes('"token_count"') || line.includes('"turn_context"');
@@ -73,13 +95,23 @@ class SessionUsageParser {
       for (const id of Array.isArray(record.payload.item.receiver_thread_ids)
         ? record.payload.item.receiver_thread_ids
         : []) {
-        if (typeof id === "string" && id) this.children.add(id);
+        if (typeof id === "string" && id) this.children.set(id, this.serviceTier);
       }
     }
     if (!hasUsage) return;
     if (record.type === "turn_context") {
       this.model = record.payload?.model ?? this.model;
-      this.serviceTier = record.payload?.service_tier ?? null;
+      const turnId = record.payload?.turn_id;
+      const recordedTier = turnId ? this.options.turnTiers?.get(turnId) : undefined;
+      const rolloutTier = nativeServiceTier(record.payload?.service_tier);
+      this.serviceTier =
+        rolloutTier ??
+        recordedTier ??
+        this.options.fallbackTier ??
+        null;
+      if (turnId && rolloutTier === undefined && recordedTier === undefined) {
+        this.untrackedTurns.add(turnId);
+      }
       return;
     }
     if (record.type !== "event_msg" || record.payload?.type !== "token_count") return;
@@ -129,26 +161,47 @@ class SessionUsageParser {
   }
 
   childThreadIds(): string[] {
-    return [...this.children];
+    return [...this.children.keys()];
+  }
+
+  childServiceTiers(): Map<string, ServiceTier> {
+    return this.children;
+  }
+
+  untrackedTurnIds(): string[] {
+    return [...this.untrackedTurns];
   }
 }
 
 /** Parse all native response usage in one append-only rollout. */
-export function parseCodexRollout(text: string): ParsedCodexRollout {
-  const parser = new SessionUsageParser();
+export function parseCodexRollout(text: string, options: ParseOptions = {}): ParsedCodexRollout {
+  const parser = new SessionUsageParser(options);
   for (const line of text.split("\n")) parser.line(line);
-  return { usage: parser.result(), childThreadIds: parser.childThreadIds() };
+  return {
+    usage: parser.result(),
+    childThreadIds: parser.childThreadIds(),
+    childServiceTiers: parser.childServiceTiers(),
+    untrackedTurnIds: parser.untrackedTurnIds(),
+  };
 }
 
-export function parseCodexSessionUsage(text: string): CodexSessionUsage | null {
-  return parseCodexRollout(text).usage;
+export function parseCodexSessionUsage(
+  text: string,
+  options: ParseOptions = {},
+): CodexSessionUsage | null {
+  return parseCodexRollout(text, options).usage;
 }
 
-async function readRolloutUsage(path: string): Promise<ParsedCodexRollout> {
-  const parser = new SessionUsageParser();
+async function readRolloutUsage(path: string, options: ParseOptions): Promise<ParsedCodexRollout> {
+  const parser = new SessionUsageParser(options);
   const lines = createInterface({ input: createReadStream(path), crlfDelay: Infinity });
   for await (const line of lines) parser.line(line);
-  return { usage: parser.result(), childThreadIds: parser.childThreadIds() };
+  return {
+    usage: parser.result(),
+    childThreadIds: parser.childThreadIds(),
+    childServiceTiers: parser.childServiceTiers(),
+    untrackedTurnIds: parser.untrackedTurnIds(),
+  };
 }
 
 /** Add native usage from a parent rollout and its child-agent rollouts. */
@@ -181,11 +234,12 @@ async function rolloutPath(sessionId: string): Promise<string | null> {
 /** Native cumulative usage and current context occupancy for a Codex thread tree. */
 export async function fetchCodexSessionUsage(
   sessionId: string,
+  fallbackTier: ServiceTier = null,
 ): Promise<CodexSessionUsage | null> {
   const rootPath = await rolloutPath(sessionId);
   if (!rootPath) return null;
 
-  const pending = [{ sessionId, path: rootPath }];
+  const pending = [{ sessionId, path: rootPath, fallbackTier }];
   const visited = new Set<string>();
   const usages: CodexSessionUsage[] = [];
 
@@ -196,10 +250,18 @@ export async function fetchCodexSessionUsage(
 
     let parsed: ParsedCodexRollout;
     try {
-      parsed = await readRolloutUsage(current.path);
+      parsed = await readRolloutUsage(current.path, {
+        turnTiers: codexTurnTiers(current.sessionId),
+        fallbackTier: current.fallbackTier,
+      });
     } catch (err) {
       console.warn(`[usage] reading Codex rollout ${current.sessionId} failed:`, String(err));
       continue;
+    }
+    // Freeze a best-effort tier for old turns. Otherwise switching presets
+    // would reprice the entire prior session on every status refresh.
+    for (const turnId of parsed.untrackedTurnIds) {
+      backfillCodexTurnTier(current.sessionId, turnId, current.fallbackTier ?? "default");
     }
     if (parsed.usage) usages.push(parsed.usage);
 
@@ -207,7 +269,13 @@ export async function fetchCodexSessionUsage(
       if (visited.has(childId)) continue;
       try {
         const childPath = await rolloutPath(childId);
-        if (childPath) pending.push({ sessionId: childId, path: childPath });
+        if (childPath) {
+          pending.push({
+            sessionId: childId,
+            path: childPath,
+            fallbackTier: parsed.childServiceTiers.get(childId) ?? current.fallbackTier,
+          });
+        }
       } catch (err) {
         // A child can still be starting when the parent status line refreshes.
         // It will be discovered again on the next refresh.

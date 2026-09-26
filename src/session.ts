@@ -337,7 +337,7 @@ export class TopicSession {
       // runStreamed starts only after this hook resolves, so this snapshot
       // cannot accidentally include any response from the new turn.
       this.turnWeeklyBaseline = this.sessionId
-        ? await codexWeeklyPercent(this.sessionId)
+        ? await codexWeeklyPercent(this.sessionId, this.turnServiceTier)
         : 0;
     }
   }
@@ -372,7 +372,7 @@ export class TopicSession {
     if (this.sessionId) setSession(this.threadId, this.sessionId);
     const extra =
       this.provider === "codex"
-        ? await codexSummaryParts(this.sessionId, this.turnWeeklyBaseline)
+        ? await codexSummaryParts(this.sessionId, this.turnWeeklyBaseline, this.turnServiceTier)
         : [];
     await status?.finish(
       summarize(
@@ -397,7 +397,7 @@ export class TopicSession {
 
   private statusDetail(): (() => Promise<string | null>) | undefined {
     if (this.provider === "codex") {
-      return () => codexWeeklyPart(this.sessionId, this.turnWeeklyBaseline);
+      return () => codexWeeklyPart(this.sessionId, this.turnWeeklyBaseline, this.turnServiceTier);
     }
     if (this.provider === "openrouter") {
       return async () => (this.turnResolvedModel ? `🤖 ${this.turnResolvedModel}` : null);

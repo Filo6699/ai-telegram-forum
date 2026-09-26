@@ -12,22 +12,22 @@ interface CreditRate {
   input: number;
   cachedInput: number;
   output: number;
-  fastMultiplier: number;
 }
+
+/** https://developers.openai.com/codex/speed */
+const FAST_MULTIPLIER = 2.5;
 
 /** Official ChatGPT Codex credits per million tokens.
  * https://learn.chatgpt.com/docs/pricing#token-rates
  */
 const CREDIT_RATES: Record<string, CreditRate> = {
-  "gpt-6-astra": { input: 250, cachedInput: 25, output: 1250, fastMultiplier: 2.5 },
-  "gpt-6-sol": { input: 50, cachedInput: 5, output: 250, fastMultiplier: 2.5 },
-  "gpt-6-luna": { input: 2.5, cachedInput: 0.25, output: 12.5, fastMultiplier: 2.5 },
-  "gpt-5.6-sol": { input: 100, cachedInput: 10, output: 500, fastMultiplier: 2.5 },
-  "gpt-5.6-terra": { input: 50, cachedInput: 5, output: 300, fastMultiplier: 2.5 },
-  "gpt-5.6-luna": { input: 5, cachedInput: 0.5, output: 30, fastMultiplier: 2.5 },
-  "gpt-5.5": { input: 125, cachedInput: 12.5, output: 750, fastMultiplier: 2.5 },
-  "gpt-5.4-mini": { input: 18.75, cachedInput: 1.875, output: 113, fastMultiplier: 2 },
-  "gpt-5.4": { input: 62.5, cachedInput: 6.25, output: 375, fastMultiplier: 2 },
+  "gpt-6-astra": { input: 250, cachedInput: 25, output: 1250 },
+  "gpt-6-sol": { input: 50, cachedInput: 5, output: 250 },
+  "gpt-6-luna": { input: 2.5, cachedInput: 0.25, output: 12.5 },
+  "gpt-5.6-sol": { input: 100, cachedInput: 10, output: 500 },
+  "gpt-5.6-terra": { input: 50, cachedInput: 5, output: 300 },
+  "gpt-5.6-luna": { input: 5, cachedInput: 0.5, output: 30 },
+  "gpt-5.5": { input: 125, cachedInput: 12.5, output: 750 },
 };
 
 export interface CodexTokenBreakdown {
@@ -63,7 +63,7 @@ export function estimateCodexCredits(
   const newInput = input - cached;
   const credits =
     (newInput * rate.input + cached * rate.cachedInput + output * rate.output) / 1_000_000;
-  return credits * (serviceTier === "fast" ? rate.fastMultiplier : 1);
+  return credits * (serviceTier === "fast" ? FAST_MULTIPLIER : 1);
 }
 
 /** Estimated share of the included rolling weekly allowance. */

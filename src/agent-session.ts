@@ -16,6 +16,7 @@ import {
 } from "./codex.ts";
 import { CodexAppServerClient, type AppServerNotification } from "./codex-app-server-client.ts";
 import { cfg } from "./config.ts";
+import { recordCodexTurnTier } from "./db.ts";
 import { PENDING_TITLE_MARK } from "./cwd.ts";
 import type { Effort } from "./effort.ts";
 import type { ImagePart } from "./media.ts";
@@ -590,6 +591,13 @@ class CodexAgentSession implements AgentSession {
         serviceTierForTurn: this.settings.serviceTier ?? "default",
       });
       turnId ??= started.turn.id;
+      if (options.deliverTelegram) {
+        try {
+          recordCodexTurnTier(threadId, turnId, this.settings.serviceTier ?? "default");
+        } catch (err) {
+          console.warn(`[codex:${this.opts.threadId}] recording turn tier failed:`, String(err));
+        }
+      }
       if (threadId === this.parentId) this.activeTurnId = turnId;
       return await completed;
     } finally {
