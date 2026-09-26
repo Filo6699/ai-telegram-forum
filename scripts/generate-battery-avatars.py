@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prebuild the 21 five-percent variants of the forum avatar.
+"""Prebuild the 21 five-percent variants of the watchdog bot avatar.
 
 Requires Pillow only when regenerating assets; the updater needs Node alone.
 """

@@ -11,9 +11,13 @@ if [[ "$repo" == *[[:space:]]* || "$node_bin" == *[[:space:]]* ]]; then
   exit 1
 fi
 
-cat > "$unit_dir/ai-telegram-forum-battery-avatar.service" <<EOF
+systemctl --user disable --now ai-telegram-forum-battery-avatar.timer 2>/dev/null || true
+rm -f "$unit_dir/ai-telegram-forum-battery-avatar.service" \
+      "$unit_dir/ai-telegram-forum-battery-avatar.timer"
+
+cat > "$unit_dir/ailillu-watchbot-battery-avatar.service" <<EOF
 [Unit]
-Description=Update AI Telegram Forum avatar from battery level
+Description=Update @claude_filo_watch_bot avatar from battery level
 Wants=network-online.target
 After=network-online.target
 
@@ -24,20 +28,20 @@ ExecStart=$node_bin $repo/scripts/update-battery-avatar.mjs
 TimeoutStartSec=45s
 EOF
 
-cat > "$unit_dir/ai-telegram-forum-battery-avatar.timer" <<'EOF'
+cat > "$unit_dir/ailillu-watchbot-battery-avatar.timer" <<'EOF'
 [Unit]
-Description=Check AI Telegram Forum battery avatar every five minutes
+Description=Check watchdog bot battery avatar every five minutes
 
 [Timer]
 OnStartupSec=30s
 OnUnitActiveSec=5min
 AccuracySec=30s
-Unit=ai-telegram-forum-battery-avatar.service
+Unit=ailillu-watchbot-battery-avatar.service
 
 [Install]
 WantedBy=timers.target
 EOF
 
 systemctl --user daemon-reload
-systemctl --user enable --now ai-telegram-forum-battery-avatar.timer
-systemctl --user start ai-telegram-forum-battery-avatar.service
+systemctl --user enable --now ailillu-watchbot-battery-avatar.timer
+systemctl --user start ailillu-watchbot-battery-avatar.service
