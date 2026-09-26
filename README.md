@@ -91,10 +91,11 @@ under your process manager with this repository as its working directory.
 ### Battery avatar
 
 The forum's chat photo can show this computer's battery level. Its top portion
-is color inverted in five-percent steps: at 50%, the upper half is inverted and
-the lower half stays original. The 21 images are generated in advance from the
-chat's original photo, so each timer run only reads the battery and uploads the
-matching image when the rounded level changes.
+is color inverted in five-percent steps according to how much charge has been
+used: at 70% charge, the upper 30% is inverted; at 50%, the upper half is
+inverted. The 21 images are generated in advance from the chat's original photo,
+so each timer run only reads the battery and uploads the matching image when
+the rounded level changes.
 
 The bot must be an administrator with **Change Group Info** permission. To
 regenerate the images after replacing `assets/battery-avatar/source.jpg`, install

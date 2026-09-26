@@ -16,6 +16,10 @@ export function roundToFive(value) {
   return Math.round(value / 5) * 5;
 }
 
+export function invertedPercent(batteryPercent) {
+  return 100 - roundToFive(batteryPercent);
+}
+
 async function batteryCapacity() {
   let path = process.env.BATTERY_CAPACITY_PATH;
   if (!path) {
@@ -46,15 +50,16 @@ async function main() {
 
   const percent = await batteryCapacity();
   const rounded = roundToFive(percent);
+  const inverted = invertedPercent(percent);
   const stateDir = join(process.env.XDG_STATE_HOME || join(homedir(), ".local/state"), "ai-telegram-forum");
   const stateFile = join(stateDir, "battery-avatar.json");
   const previous = await readFile(stateFile, "utf8").then(JSON.parse).catch(() => null);
-  if (previous?.chatId === chatId && previous?.rounded === rounded) {
+  if (previous?.chatId === chatId && previous?.inverted === inverted) {
     console.log(`Battery ${percent}% → ${rounded}%: avatar already current`);
     return;
   }
 
-  const name = `${String(rounded).padStart(3, "0")}.jpg`;
+  const name = `${String(inverted).padStart(3, "0")}.jpg`;
   const photo = await readFile(join(root, "assets/battery-avatar", name));
   const form = new FormData();
   form.append("chat_id", chatId);
@@ -69,7 +74,7 @@ async function main() {
 
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   const temporary = `${stateFile}.${process.pid}.tmp`;
-  await writeFile(temporary, JSON.stringify({ chatId, rounded }) + "\n", { mode: 0o600 });
+  await writeFile(temporary, JSON.stringify({ chatId, rounded, inverted }) + "\n", { mode: 0o600 });
   await rename(temporary, stateFile);
   console.log(`Battery ${percent}% → ${rounded}%: uploaded ${name}`);
 }
