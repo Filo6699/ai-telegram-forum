@@ -88,6 +88,31 @@ under your process manager with this repository as its working directory.
 
 ## Using it
 
+### Battery avatar
+
+The forum's chat photo can show this computer's battery level. Its top portion
+is color inverted in five-percent steps: at 50%, the upper half is inverted and
+the lower half stays original. The 21 images are generated in advance from the
+chat's original photo, so each timer run only reads the battery and uploads the
+matching image when the rounded level changes.
+
+The bot must be an administrator with **Change Group Info** permission. To
+regenerate the images after replacing `assets/battery-avatar/source.jpg`, install
+Pillow (`python3 -m pip install Pillow`) and run
+`python3 scripts/generate-battery-avatars.py`. To install the lightweight user
+systemd timer and apply the current battery level immediately, run:
+
+```bash
+bash scripts/install-battery-avatar-timer.sh
+```
+
+The timer checks every five minutes. It reads the one battery found under
+`/sys/class/power_supply`; set `BATTERY_CAPACITY_PATH` in `.env` if your machine
+has several batteries or uses a different capacity file. The last uploaded
+level is stored under `~/.local/state/ai-telegram-forum/` so unchanged levels
+do not cause another Telegram update. Inspect it with
+`systemctl --user status ai-telegram-forum-battery-avatar.timer`.
+
 Send tasks in the launcher:
 
 ```text
