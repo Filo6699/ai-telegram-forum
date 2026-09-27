@@ -155,6 +155,7 @@ shows tool activity while it works.
   this is the persistent default for new sessions; inside a topic, it changes
   only that topic.
 - `/toolcalls off|only_file_edits|full` — control separate tool-call messages.
+  Messages show a short command or path instead of the full tool input.
 
 Model and effort changes apply from the next turn and persist in that topic.
 In the launcher, they apply only to the next session. Use `/model default` or

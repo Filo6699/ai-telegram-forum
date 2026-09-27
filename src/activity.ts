@@ -16,8 +16,31 @@ export function toolcallText(mode: Toolcalls, name: string, input: unknown): str
   if (mode === "off") return null;
   const edits = /^(Edit|MultiEdit|Write|NotebookEdit|apply_patch)$/i.test(name);
   if (mode === "only_file_edits" && !edits) return null;
-  const raw = typeof input === "string" ? input : JSON.stringify(input ?? {}, null, 2);
-  // Bound notifications; arbitrary tool input must not break the code fence.
-  const detail = raw.replace(/```/g, "` ` `");
-  return `🔧 ${name}\n\n\`\`\`\n${detail.slice(0, 3000)}${detail.length > 3000 ? "\n… (truncated)" : ""}\n\`\`\``;
+  const data = input && typeof input === "object" && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : null;
+  const firstString = (...values: unknown[]): string | null =>
+    values.find((value): value is string => typeof value === "string" && value.trim().length > 0) ?? null;
+
+  // Codex app-server items carry ids, status and duplicated command fields.
+  // Show the useful argument only, including for Claude and OpenRouter tools.
+  let detail = typeof input === "string" ? input : firstString(
+    data?.command,
+    data?.file_path,
+    data?.path,
+    data?.url,
+    data?.query,
+    data?.search_query,
+  );
+  if (!detail && Array.isArray(data?.changes)) {
+    detail = data.changes
+      .map((change: unknown) => change && typeof change === "object"
+        ? firstString((change as Record<string, unknown>).path) : null)
+      .filter(Boolean)
+      .join(", ");
+  }
+  if (!detail) return `🔧 ${name}`;
+  const compact = detail.replace(/\s+/g, " ").trim();
+  const max = 200;
+  return `🔧 ${name}: ${compact.length > max ? `${compact.slice(0, max - 1)}…` : compact}`;
 }
