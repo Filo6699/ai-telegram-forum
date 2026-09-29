@@ -50,6 +50,10 @@ npm run codexify -- --dry-run    # backwards-compatible Codex alias
 
 ## Rules
 
+- **Keep this repository focused on the Telegram ↔ AI bridge.** Add only code,
+  assets, documentation, and tooling that directly support that bridge. If a
+  requested change seems unrelated, ask the user how it serves the bridge
+  before making it; do not add off-topic functionality on an assumption.
 - **The agent speaks for itself.** Everything the user reads comes from the
   agent calling `mcp__tg__send`; the transcript is never relayed. Don't add
   unsolicited activity posts — tool calls belong in the live status line,
