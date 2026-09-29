@@ -88,34 +88,6 @@ under your process manager with this repository as its working directory.
 
 ## Using it
 
-### Battery avatar
-
-The profile photo of `@claude_filo_watch_bot` shows this computer's battery
-level. Its top portion is color inverted in five-percent steps according to how
-much charge has been used: at 70% charge, the upper 30% is inverted; at 50%,
-the upper half is inverted. The forum photo stays unchanged, so there are no
-forum service messages or notifications for battery changes. Its original photo
-is preserved in `assets/forum-avatar-original.jpg`.
-
-The 21 variants are generated in advance from the watchdog bot's original
-photo. To regenerate them after replacing `assets/battery-avatar/source.jpg`,
-install Pillow (`python3 -m pip install Pillow`) and run
-`python3 scripts/generate-battery-avatars.py`. The updater reads the watchdog
-bot token from `~/ailillu-watch/config/bot.env` (or `WATCH_BOT_TOKEN_FILE`) and
-only uploads when the rounded level or generated image changes. To install the
-user systemd timer and apply the current level immediately, run:
-
-```bash
-bash scripts/install-battery-avatar-timer.sh
-```
-
-The timer checks every five minutes. It reads the one battery found under
-`/sys/class/power_supply`; set `BATTERY_CAPACITY_PATH` in `.env` if your machine
-has several batteries or uses a different capacity file. The last uploaded
-level is stored under `~/.local/state/ai-telegram-forum/` so unchanged levels
-do not cause another Telegram update. Inspect it with
-`systemctl --user status ailillu-watchbot-battery-avatar.timer`.
-
 Send tasks in the launcher:
 
 ```text
