@@ -13,6 +13,7 @@ import {
 } from "../src/codex-session-usage.ts";
 import { formatCodexWeeklyPart } from "../src/codex-summary.ts";
 import { compactMs, fmtTokens } from "../src/fmt.ts";
+import { modelGroup, parseModel } from "../src/model.ts";
 import { codexModelPicker, codexPresetName } from "../src/preset.ts";
 import { asServiceTier, serviceTierGroup } from "../src/preset-config.ts";
 
@@ -141,6 +142,8 @@ test("Codex quota credits discount cached input and apply fast mode", () => {
   assert.equal(estimateCodexCredits(usage, "gpt-5.6-sol", "fast"), 195);
   assert.equal(estimateCodexCredits(usage, "gpt-6-sol", null), 39);
   assert.equal(estimateCodexCredits(usage, "gpt-6-sol", "fast"), 97.5);
+  assert.equal(estimateCodexCredits(usage, "gpt-6.1-sol", null), 37);
+  assert.equal(estimateCodexCredits(usage, "gpt-6.1-sol", "fast"), 92.5);
   assert.equal(estimateCodexCredits(usage, "gpt-6-luna", null), 1.95);
   assert.equal(estimateCodexCredits(usage, "gpt-6-luna", "fast"), 4.875);
   assert.equal(estimateCodexCredits(usage, "gpt-5.4", "fast"), null);
@@ -148,6 +151,12 @@ test("Codex quota credits discount cached input and apply fast mode", () => {
   assert.equal(formatCodexWeeklyPercent(0.824), "0.8%");
   assert.equal(formatCodexWeeklyPercent(0.01), "0.01%");
   assert.equal(formatCodexWeeklyPercent(0.02), "0.02%");
+});
+
+test("Sol alias and Codex model buttons include GPT-6.1 Sol", () => {
+  assert.equal(parseModel("sol", "codex"), "gpt-6.1-sol");
+  assert.equal(parseModel("gpt-6-sol", "codex"), "gpt-6-sol");
+  assert.ok(modelGroup(null, "codex").options.some((option) => option.value === "gpt-6.1-sol"));
 });
 
 test("Codex rollout prices each turn at its persisted tier when native tier is absent", () => {
