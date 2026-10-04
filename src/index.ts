@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { progressLevels, toolcallModes, type Progress, type Toolcalls } from "./activity.ts";
 import { setActivity } from "./db.ts";
 import { cfg } from "./config.ts";
+import { botCommands, parseCommand, type ParsedCommand } from "./commands.ts";
 import { fetchCodexPlanLimits } from "./codex-limits.ts";
 import {
   classify,
@@ -354,23 +355,13 @@ async function sessionTopic(
   return t;
 }
 
-/**
- * Run a leading `/command`, and say whether it was one of ours.
- *
- * `false` means "not mine, route it as a prompt" — a launcher message may start
- * with a `/path` cwd prefix, and swallowing those is how a session goes silent.
- */
-async function handleCommand(ctx: any, thread: number | undefined): Promise<boolean> {
-  const raw = ctx.message.text.trim().split(/\s+/)[0];
-  // A bot command is one word: `/name`, optionally `@addressed` to a bot. A
-  // path prefix (`/srv/app …`) has slashes inside it, so it never matches.
-  const parts = raw.match(/^\/([a-z0-9_]+)(?:@([a-z0-9_]+))?$/i);
-  if (!parts) return false;
-  const [, name, addressee] = parts as unknown as [string, string, string | undefined];
-  // `/cmd@thisbot` is the same command; anything addressed to another bot isn't
-  // ours to answer, but it isn't a prompt either — drop it.
-  if (addressee && addressee.toLowerCase() !== botUsername.toLowerCase()) return true;
-  const cmd = `/${name.toLowerCase()}`;
+/** Run a resolved command without forwarding its original text as a prompt. */
+async function handleCommand(
+  ctx: any,
+  thread: number | undefined,
+  parsed: Extract<ParsedCommand, { kind: "command" }>,
+): Promise<void> {
+  const { command: cmd, args } = parsed;
 
   if (cmd === "/progress" || cmd === "/toolcalls") {
     const setting = cmd === "/progress" ? "progress" : "toolcalls";
@@ -379,7 +370,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
     const topic = launcher ? undefined : getTopic(thread!);
     if (!launcher && !topic) {
       await replySilently(ctx, "⚠️ Use this command in a session topic or the launcher.", { message_thread_id: thread });
-      return true;
+      return;
     }
     const current = topic?.[setting] ?? (setting === "progress" ? defaultProgress : nextToolcalls);
     const apply = (value: string) => {
@@ -391,7 +382,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
         else nextToolcalls = value as Toolcalls;
       } else setActivity(thread!, setting, value as Progress | Toolcalls);
     };
-    const arg = ctx.message.text.trim().split(/\s+/)[1]?.toLowerCase();
+    const arg = args.split(/\s+/)[0]?.toLowerCase();
     if (arg) {
       if ((values as readonly string[]).includes(arg)) {
         apply(arg);
@@ -417,7 +408,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
         if (!cancelled) apply(picks.a ?? current);
       }).catch(err => console.warn(`[${setting}] picker failed:`, String(err)));
     }
-    return true;
+    return;
   }
 
   if (cmd === "/id") {
@@ -428,7 +419,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
         parse_mode: "Markdown",
       });
     }
-    return true;
+    return;
   }
 
   if (cmd === "/resume") {
@@ -445,31 +436,31 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
         parse_mode: "Markdown",
       });
     }
-    return true;
+    return;
   }
 
   if (cmd === "/btw") {
-    const prompt = ctx.message.text.trim().replace(/^\/btw(?:@[a-z0-9_]+)?\s*/i, "").trim();
+    const prompt = args;
     if (!prompt) {
       await replySilently(ctx, "⚠️ usage: `/btw <message>`", {
         message_thread_id: thread,
         parse_mode: "Markdown",
         reply_parameters: { message_id: ctx.message.message_id },
       });
-      return true;
+      return;
     }
     const t = await sessionTopic(ctx, thread, true);
-    if (!t) return true;
+    if (!t) return;
     // Detached: a side turn can run alongside the main turn, and Telegram's
     // update loop must remain free for commands and callback queries.
     void sessionFor(bot, t)
       .btw(contentOf(prompt, []), ctx.message.message_id)
       .catch((err) => console.error(`[btw:${thread}] failed:`, err));
-    return true;
+    return;
   }
 
-  if (cmd === "/provider" || cmd === "/agent") {
-    const arg = ctx.message.text.trim().split(/\s+/)[1];
+  if (cmd === "/provider") {
+    const arg = args.split(/\s+/)[0];
     if (arg) {
       const provider = parseProvider(arg);
       if (!provider) {
@@ -488,13 +479,13 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
           });
         } else await applyProvider(ctx, thread, provider);
       }
-      return true;
+      return;
     }
     if (!isLauncher(thread)) {
       await replySilently(ctx, "⚠️ an existing topic can't change agent — choose it in the launcher.", {
         message_thread_id: thread,
       });
-      return true;
+      return;
     }
     const current = nextProvider ?? cfg.provider;
     void askPick(bot, {
@@ -506,13 +497,13 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
         applyProvider(ctx, thread, asProvider(picks.p ?? null, cfg.provider), false),
       )
       .catch((err) => console.warn(`[${cmd}] applying the picked value failed:`, String(err)));
-    return true;
+    return;
   }
 
   if (cmd === "/effort" || cmd === "/model") {
     const topic = isLauncher(thread) ? undefined : getTopic(thread!);
     const provider = topic?.provider ?? nextProvider ?? cfg.provider;
-    const arg = ctx.message.text.trim().split(/\s+/)[1];
+    const arg = args.split(/\s+/)[0];
     const isEffort = cmd === "/effort";
     if (isEffort && provider === "openrouter") {
       await replySilently(
@@ -520,7 +511,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
         "⚠️ OpenRouter reasoning is configured in OPENROUTER_PRESETS; choose a preset with `/model`.",
         { message_thread_id: thread, parse_mode: "Markdown" },
       );
-      return true;
+      return;
     }
     if (arg) {
       const value = isEffort ? parseEffort(arg, provider) : parseModel(arg, provider);
@@ -528,11 +519,11 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
         await replySilently(ctx, isEffort ? effortUsage(provider) : modelUsage(provider), {
           message_thread_id: thread,
         });
-        return true;
+        return;
       }
       if (isEffort) await applyEffort(ctx, thread, value as Effort);
       else await applyModel(ctx, thread, value as Model);
-      return true;
+      return;
     }
     // Nothing named — same effect, chosen with the buttons instead. Detached
     // like the launch picker: waiting on a button from inside a handler would
@@ -592,7 +583,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
         return applyModel(ctx, thread, asModel(picks.m ?? null), false);
       })
       .catch((err) => console.warn(`[${cmd}] applying the picked value failed:`, String(err)));
-    return true;
+    return;
   }
 
   if (cmd === "/stop") {
@@ -606,16 +597,16 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
         await replySilently(ctx, `⚠️ couldn't stop it: ${String(err)}`, {
           message_thread_id: thread,
         });
-        return true;
+        return;
       }
     }
     if (!stopped) {
       await replySilently(ctx, "⚠️ nothing running here.", { message_thread_id: thread });
     }
-    return true;
+    return;
   }
 
-  if (cmd !== "/usage") return false;
+  if (cmd !== "/usage") return;
 
   // In a task topic -> that topic's usage; in the launcher -> grand total.
   const t = thread !== undefined ? getTopic(thread) : undefined;
@@ -624,7 +615,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
   const provider = t?.provider ?? nextProvider ?? cfg.provider;
   if (provider === "openrouter") {
     await replySilently(ctx, local, { message_thread_id: thread, parse_mode: "Markdown" });
-    return true;
+    return;
   }
   // Asking the provider for plan limits can take a few seconds (and may have
   // to start a child), so post the local tally first and fill the rest in.
@@ -649,7 +640,7 @@ async function handleCommand(ctx: any, thread: number | undefined): Promise<bool
   } catch (err) {
     console.warn("[usage] editing the reply failed:", String(err));
   }
-  return true;
+  return;
 }
 
 let botUsername = "";
@@ -899,15 +890,21 @@ async function route(
 const mine = (ctx: any): boolean =>
   ctx.from?.id === cfg.allowedUserId && ctx.chat.id === cfg.chatId;
 
+// Consume slash messages before any text/media can reach an agent. Albums
+// are checked together below so a command caption consumes the whole album.
+bot.on("message", async (ctx, next) => {
+  if (!mine(ctx)) return;
+  if (ctx.message.media_group_id) return next();
+  const parsed = parseCommand(ctx.message.text ?? ctx.message.caption ?? "", botUsername);
+  if (parsed.kind === "prompt") return next();
+  if (parsed.kind === "command") {
+    await handleCommand(ctx, ctx.message.message_thread_id, parsed);
+  }
+});
+
 bot.on("message:text", async (ctx) => {
   if (!mine(ctx)) return;
-  const text = ctx.message.text;
-
-  // Commands (e.g. /usage) are handled here; anything else that merely starts
-  // with a slash — a `/path` cwd prefix, above all — is a prompt like any other.
-  if (text.startsWith("/") && (await handleCommand(ctx, ctx.message.message_thread_id))) return;
-
-  await route(ctx, text, []);
+  await route(ctx, ctx.message.text, []);
 });
 
 /** Caption first, then what came with it: the caption is what titles a topic. */
@@ -967,6 +964,14 @@ async function contentFrom(ctx: any): Promise<AgentInput | null> {
 }
 
 async function routeMediaGroup(sources: any[]): Promise<void> {
+  for (const source of sources) {
+    const parsed = parseCommand(source.message.caption ?? "", botUsername);
+    if (parsed.kind === "prompt") continue;
+    if (parsed.kind === "command") {
+      await handleCommand(source, source.message.message_thread_id, parsed);
+    }
+    return;
+  }
   const parts = (await Promise.all(sources.map(contentFrom))).filter(
     (part): part is AgentInput => part !== null,
   );
@@ -1014,18 +1019,7 @@ async function main() {
       `model=${defaultModel(cfg.provider)}`,
   );
 
-  await bot.api.setMyCommands([
-    { command: "usage", description: "Tokens/cost here (or all in the launcher) + plan limits" },
-    { command: "btw", description: "Ask a side question without interrupting the main task" },
-    { command: "provider", description: "Next session agent: Claude, Codex, or OpenRouter" },
-    { command: "effort", description: "Reasoning effort: /effort high, or /effort for buttons" },
-    { command: "progress", description: "Progress updates: off, brief, detailed" },
-    { command: "toolcalls", description: "Tool calls: off, only_file_edits, full" },
-    { command: "model", description: "Model: /model sonnet, or /model for buttons" },
-    { command: "stop", description: "Interrupt the turn running in this topic" },
-    { command: "resume", description: "Shell command to continue this session in a terminal" },
-    { command: "id", description: "Agent session id of this topic" },
-  ]);
+  await bot.api.setMyCommands([...botCommands]);
 
   // Each callback owner passes unknown buttons to the next one. Permission
   // prompts are last and answer anything left over.
