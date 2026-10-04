@@ -1,0 +1,1047 @@
+import { Bot, HttpError, InlineKeyboard } from "grammy";
+import { setTimeout as delay } from "node:timers/promises";
+import { progressLevels, toolcallModes, type Progress, type Toolcalls } from "../telegram/activity.ts";
+import { setActivity } from "../storage/db.ts";
+import { cfg } from "../config/env.ts";
+import { botCommands, parseCommand, type ParsedCommand } from "../telegram/commands.ts";
+import { fetchCodexPlanLimits } from "../providers/codex/limits.ts";
+import {
+  classify,
+  fetchDocument,
+  fetchImage,
+  humanSize,
+  isService,
+  type DocumentPart,
+  type ImagePart,
+} from "../telegram/media.ts";
+import { placeholderTitle, resolveCwd } from "../sessions/cwd.ts";
+import {
+  asEffort,
+  defaultEffort,
+  effortGroup,
+  effortLabel,
+  effortUsage,
+  parseEffort,
+  type Effort,
+} from "../config/effort.ts";
+import {
+  asModel,
+  defaultModel,
+  modelGroup,
+  modelLabel,
+  modelUsage,
+  parseModel,
+  type Model,
+} from "../config/model.ts";
+import { askPick, LAUNCH_WAIT_MS, registerPickerButtons } from "../telegram/picker.ts";
+import {
+  codexModelPicker,
+  codexPresetPicker,
+  type CodexPresetChoice,
+} from "../telegram/codex-presets.ts";
+import {
+  openRouterModelPicker,
+  type OpenRouterSettings,
+} from "../config/openrouter-presets.ts";
+import { launchPresetPicker } from "../telegram/launch-preset.ts";
+import {
+  asServiceTier,
+  serviceTierGroup,
+  serviceTierLabel,
+  type ServiceTier,
+} from "../config/codex-presets.ts";
+import { fmtTokens } from "../shared/fmt.ts";
+import { startHeartbeat } from "./heartbeat.ts";
+import { fetchPlanLimits } from "../providers/claude/limits.ts";
+import { planLimitsText } from "../telegram/limits.ts";
+import { MediaGroupCollector } from "../telegram/media-group.ts";
+import { registerPermissionButtons } from "../telegram/permission.ts";
+import { anyLiveQuery, liveSession, sessionFor, type AgentInput } from "../sessions/topic.ts";
+import { sideTurnReady } from "../sessions/side-turn.ts";
+import {
+  asProvider,
+  parseProvider,
+  providerGroup,
+  providerLabel,
+  type Provider,
+} from "../config/provider.ts";
+import { startSweep } from "./sweep.ts";
+import {
+  createTopic,
+  getTopic,
+  getDefaultProgress,
+  setOpenRouterSettings,
+  setCodexSettings,
+  setDefaultProgress,
+  setEffort,
+  setModel,
+  setStatus,
+  totals,
+  type Topic,
+} from "../storage/db.ts";
+
+const bot = new Bot(cfg.token);
+
+const TOPIC_CREATE_ATTEMPTS = 5;
+const TOPIC_CREATE_RETRY_DELAY_MS = 2_000;
+
+/** Replies produced synchronously from an inbound update do not need to buzz
+ * the phone the user is already holding. Delayed agent output stays audible. */
+const replySilently = (
+  ctx: any,
+  text: string,
+  other: Record<string, unknown> = {},
+): Promise<any> => ctx.reply(text, { ...other, disable_notification: true });
+
+const isLauncher = (threadId: number | undefined) =>
+  threadId === undefined || threadId === cfg.launcherThreadId;
+
+const fmt = fmtTokens;
+
+function topicUsageText(t: Topic): string {
+  return (
+    `📊 *${t.title}*\n` +
+    `turns: ${t.turns}\n` +
+    `agent: ${providerLabel(t.provider)}\n` +
+    `model: ${modelLabel(t.model, defaultModel(t.provider), t.provider)}\n` +
+    (t.provider === "openrouter"
+      ? `preset: ${t.openrouter_settings?.preset ?? "custom/default"}\n`
+      : `effort: ${effortLabel(t.effort, defaultEffort(t.cwd, t.provider))}\n`) +
+    (t.provider === "codex" ? `mode: ${serviceTierLabel(t.service_tier)}\n` : "") +
+    `tokens: ${fmt(t.in_tokens)} in / ${fmt(t.out_tokens)} out\n` +
+    `cost: ${t.cost_known ? `$${t.cost_usd.toFixed(4)}` : "unavailable"}`
+  );
+}
+
+function totalsText(): string {
+  const s = totals();
+  const provider = nextProvider ?? cfg.provider;
+  const preset =
+    provider === "codex" && cfg.codexPresets.length
+      ? codexPresetPicker(nextModel, nextEffort, nextServiceTier).selected(null)
+      : null;
+  const openrouter =
+    provider === "openrouter"
+      ? openRouterModelPicker(nextOpenRouterSettings, cfg.openrouterModel, cfg.openrouterPresets).selected(null)
+      : null;
+  return (
+    `📊 *All topics*\n` +
+    `topics: ${s.topics} · turns: ${s.turns}\n` +
+    `next session agent: ${providerLabel(provider)}\n` +
+    (preset ? `next session preset: ${preset.name}\n` : "") +
+    (openrouter?.settings.preset ? `next session preset: ${openrouter.settings.preset}\n` : "") +
+    `next session model: ${modelLabel(
+      preset?.model ?? openrouter?.settings.model ?? nextModel ?? null,
+      defaultModel(provider),
+      provider,
+    )}\n` +
+    (provider === "openrouter"
+      ? ""
+      : `next session effort: ${effortLabel(preset?.effort ?? nextEffort ?? null, defaultEffort(cfg.defaultCwd, provider))}\n`) +
+    (preset ? `next session mode: ${serviceTierLabel(preset.serviceTier)}\n` : "") +
+    `tokens: ${fmt(s.in_tokens)} in / ${fmt(s.out_tokens)} out\n` +
+    `cost: ${s.cost_known ? `$${s.cost_usd.toFixed(4)}` : "unavailable"}`
+  );
+}
+
+/**
+ * `/effort` and `/model` in the launcher belong to the next session only: they
+ * are consumed by the launch that follows, where they arrive as the picker's
+ * pre-selection.
+ */
+let nextEffort: Effort | undefined;
+let defaultProgress: Progress = getDefaultProgress();
+let nextToolcalls: Toolcalls = "off";
+let nextModel: Model | undefined;
+let nextServiceTier: ServiceTier | undefined;
+let nextProvider: Provider | undefined;
+let nextOpenRouterSettings: OpenRouterSettings | undefined;
+
+/**
+ * Where a `/effort` or `/model` lands. `null` is the launcher — the choice is
+ * held for the next session; `undefined` means there is nowhere to put it, and
+ * the caller has already said so.
+ */
+async function target(ctx: any, thread: number | undefined): Promise<Topic | null | undefined> {
+  if (isLauncher(thread)) return null;
+  const t = getTopic(thread!);
+  if (t) return t;
+  await replySilently(ctx, "⚠️ run this inside a session topic, not here.", {
+    message_thread_id: thread,
+  });
+  return undefined;
+}
+
+/**
+ * Put a chosen level into effect: the launcher holds it for the next session, a
+ * topic records it against itself and hands it to the agent from the next turn.
+ * `announce` is off when the choice came from a picker — its own message
+ * already says what was picked.
+ */
+async function applyEffort(
+  ctx: any,
+  thread: number | undefined,
+  level: Effort,
+  announce = true,
+): Promise<void> {
+  const t = await target(ctx, thread);
+  if (t === undefined) return;
+  if (t === null) {
+    const provider = nextProvider ?? cfg.provider;
+    nextEffort = level;
+    if (announce) {
+      const label = effortLabel(level, defaultEffort(cfg.defaultCwd, provider));
+      await replySilently(ctx, `⚙️ next session: ${label}`, { message_thread_id: thread });
+    }
+    return;
+  }
+  const s = liveSession(t.thread_id);
+  if (s) s.setEffort(level);
+  else setEffort(t.thread_id, level);
+  if (announce) {
+    await replySilently(ctx, `⚙️ effort: ${effortLabel(level, defaultEffort(t.cwd, t.provider))}`, {
+      message_thread_id: thread,
+    });
+  }
+}
+
+/** The same, for the model — a live session swaps it on the child in place. */
+async function applyModel(
+  ctx: any,
+  thread: number | undefined,
+  model: Model,
+  announce = true,
+): Promise<void> {
+  const t = await target(ctx, thread);
+  if (t === undefined) return;
+  if (t === null) {
+    const provider = nextProvider ?? cfg.provider;
+    nextModel = model;
+    if (provider === "openrouter") {
+      nextOpenRouterSettings = model ? { model, preset: null } : { model: null };
+    }
+    if (announce) {
+      await replySilently(
+        ctx,
+        `🤖 next session: ${modelLabel(model, defaultModel(provider), provider)}`,
+        {
+          message_thread_id: thread,
+        },
+      );
+    }
+    return;
+  }
+  const s = liveSession(t.thread_id);
+  if (s) s.setModel(model);
+  else if (t.provider === "openrouter") {
+    setOpenRouterSettings(t.thread_id, model ? { model, preset: null } : { model: null });
+    setModel(t.thread_id, model);
+  } else setModel(t.thread_id, model);
+  if (announce) {
+    await replySilently(
+      ctx,
+      `🤖 model: ${modelLabel(model, defaultModel(t.provider), t.provider)}`,
+      { message_thread_id: thread },
+    );
+  }
+}
+
+/** Apply a complete OpenRouter preset or custom setting atomically. */
+async function applyOpenRouterSettings(
+  ctx: any,
+  thread: number | undefined,
+  settings: OpenRouterSettings,
+  announce = true,
+): Promise<void> {
+  const t = await target(ctx, thread);
+  if (t === undefined) return;
+  if (t === null) {
+    nextOpenRouterSettings = { ...settings };
+    nextModel = settings.model ?? undefined;
+    if (announce) {
+      await replySilently(
+        ctx,
+        `🤖 next session: ${settings.model ?? cfg.openrouterModel}${settings.preset ? ` · 🎛️ ${settings.preset}` : ""}`,
+        { message_thread_id: thread },
+      );
+    }
+    return;
+  }
+  const s = liveSession(t.thread_id);
+  if (s) s.setOpenRouterSettings(settings);
+  else setOpenRouterSettings(t.thread_id, settings);
+  if (announce) {
+    await replySilently(
+      ctx,
+      `🤖 model: ${settings.model ?? cfg.openrouterModel}${settings.preset ? ` · 🎛️ ${settings.preset}` : ""}`,
+      { message_thread_id: thread },
+    );
+  }
+}
+
+/** Apply all settings represented by one configured Codex preset. */
+async function applyCodexPreset(
+  ctx: any,
+  thread: number | undefined,
+  preset: CodexPresetChoice,
+): Promise<void> {
+  const t = await target(ctx, thread);
+  if (t === undefined) return;
+  if (t === null) {
+    nextModel = preset.model;
+    nextEffort = preset.effort;
+    nextServiceTier = preset.serviceTier;
+    return;
+  }
+  const s = liveSession(t.thread_id);
+  if (s) s.setCodexSettings(preset.model, preset.effort, preset.serviceTier);
+  else setCodexSettings(t.thread_id, preset.model, preset.effort, preset.serviceTier);
+}
+
+/** Provider is chosen before a topic exists; changing it would switch session
+ * stores and cannot preserve history, so established topics keep theirs. */
+async function applyProvider(
+  ctx: any,
+  thread: number | undefined,
+  provider: Provider,
+  announce = true,
+): Promise<void> {
+  if (!isLauncher(thread)) {
+    await replySilently(
+      ctx,
+      "⚠️ an existing topic can't change agent — choose it in the launcher.",
+      { message_thread_id: thread },
+    );
+    return;
+  }
+  nextProvider = provider;
+  nextModel = undefined;
+  nextEffort = undefined;
+  nextServiceTier = undefined;
+  nextOpenRouterSettings = undefined;
+  if (announce) {
+    await replySilently(ctx, `🧠 next session agent: ${providerLabel(provider)}`, {
+      message_thread_id: thread,
+    });
+  }
+}
+
+/** Shell-quote a path so the pasted command survives spaces and quotes. */
+function shq(s: string): string {
+  return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * `/resume` and `/id` only make sense inside a task topic — the launcher has no
+ * session of its own. Returns the topic, or replies with why it can't.
+ */
+async function sessionTopic(
+  ctx: any,
+  thread: number | undefined,
+  allowLive = false,
+): Promise<Topic | undefined> {
+  const t = thread !== undefined && !isLauncher(thread) ? getTopic(thread) : undefined;
+  if (!t) {
+    await replySilently(ctx, "⚠️ run this inside a session topic, not here.", {
+      message_thread_id: thread,
+    });
+    return;
+  }
+  if (!sideTurnReady(t.session_id, allowLive && Boolean(liveSession(t.thread_id)))) {
+    await replySilently(ctx, "⚠️ this topic has no session id yet — send a message first.", {
+      message_thread_id: thread,
+    });
+    return;
+  }
+  return t;
+}
+
+/** Run a resolved command without forwarding its original text as a prompt. */
+async function handleCommand(
+  ctx: any,
+  thread: number | undefined,
+  parsed: Extract<ParsedCommand, { kind: "command" }>,
+): Promise<void> {
+  const { command: cmd, args } = parsed;
+
+  if (cmd === "/progress" || cmd === "/toolcalls") {
+    const setting = cmd === "/progress" ? "progress" : "toolcalls";
+    const values = setting === "progress" ? progressLevels : toolcallModes;
+    const launcher = isLauncher(thread);
+    const topic = launcher ? undefined : getTopic(thread!);
+    if (!launcher && !topic) {
+      await replySilently(ctx, "⚠️ Use this command in a session topic or the launcher.", { message_thread_id: thread });
+      return;
+    }
+    const current = topic?.[setting] ?? (setting === "progress" ? defaultProgress : nextToolcalls);
+    const apply = (value: string) => {
+      if (launcher) {
+        if (setting === "progress") {
+          defaultProgress = value as Progress;
+          setDefaultProgress(defaultProgress);
+        }
+        else nextToolcalls = value as Toolcalls;
+      } else setActivity(thread!, setting, value as Progress | Toolcalls);
+    };
+    const arg = args.split(/\s+/)[0]?.toLowerCase();
+    if (arg) {
+      if ((values as readonly string[]).includes(arg)) {
+        apply(arg);
+        const scope = launcher
+          ? setting === "progress" ? " (default for new sessions)" : " (next session)"
+          : "";
+        await replySilently(ctx, `${setting}: ${arg}${scope}`, { message_thread_id: thread });
+      } else await replySilently(ctx, `Usage: ${cmd} ${values.join(" | ")}`, { message_thread_id: thread });
+    } else {
+      void askPick(bot, {
+        threadId: thread,
+        title: launcher
+          ? setting === "progress" ? "progress default for new sessions" : "toolcalls for the next session"
+          : `${setting} for this topic`,
+        allowCancel: true,
+        groups: [{ key: "a", options: values.map(value => ({ value, label: value })), perRow: 3,
+          initial: current,
+          fallback: "off",
+          summary: value => launcher && setting === "progress"
+            ? `progress default for new sessions: ${value}`
+            : `${setting}: ${value}` }],
+      }).then(({ picks, cancelled }) => {
+        if (!cancelled) apply(picks.a ?? current);
+      }).catch(err => console.warn(`[${setting}] picker failed:`, String(err)));
+    }
+    return;
+  }
+
+  if (cmd === "/id") {
+    const t = await sessionTopic(ctx, thread);
+    if (t) {
+      await replySilently(ctx, `\`${t.session_id}\``, {
+        message_thread_id: thread,
+        parse_mode: "Markdown",
+      });
+    }
+    return;
+  }
+
+  if (cmd === "/resume") {
+    const t = await sessionTopic(ctx, thread);
+    if (t) {
+      const resume =
+        t.provider === "openrouter"
+          ? `OpenRouter history is stored in ${cfg.openrouterHistoryPath}/${t.session_id}.jsonl and resumes automatically`
+          : t.provider === "codex"
+          ? `codex resume ${t.session_id}`
+          : `claude --resume ${t.session_id}`;
+      await replySilently(ctx, `\`\`\`\ncd ${shq(t.cwd)} && ${resume}\n\`\`\``, {
+        message_thread_id: thread,
+        parse_mode: "Markdown",
+      });
+    }
+    return;
+  }
+
+  if (cmd === "/btw") {
+    const prompt = args;
+    if (!prompt) {
+      await replySilently(ctx, "⚠️ usage: `/btw <message>`", {
+        message_thread_id: thread,
+        parse_mode: "Markdown",
+        reply_parameters: { message_id: ctx.message.message_id },
+      });
+      return;
+    }
+    const t = await sessionTopic(ctx, thread, true);
+    if (!t) return;
+    // Detached: a side turn can run alongside the main turn, and Telegram's
+    // update loop must remain free for commands and callback queries.
+    void sessionFor(bot, t)
+      .btw(contentOf(prompt, []), ctx.message.message_id)
+      .catch((err) => console.error(`[btw:${thread}] failed:`, err));
+    return;
+  }
+
+  if (cmd === "/provider") {
+    const arg = args.split(/\s+/)[0];
+    if (arg) {
+      const provider = parseProvider(arg);
+      if (!provider) {
+        await replySilently(
+          ctx,
+          `⚠️ unknown agent. Use ${cfg.openrouterEnabled ? "`claude`, `codex`, or `openrouter`" : "`claude` or `codex`"}.`,
+          {
+          message_thread_id: thread,
+          parse_mode: "Markdown",
+          },
+        );
+      } else {
+        if (provider === "openrouter" && !cfg.openrouterEnabled) {
+          await replySilently(ctx, "⚠️ OpenRouter is disabled: set a non-empty OPENROUTER_API_KEY.", {
+            message_thread_id: thread,
+          });
+        } else await applyProvider(ctx, thread, provider);
+      }
+      return;
+    }
+    if (!isLauncher(thread)) {
+      await replySilently(ctx, "⚠️ an existing topic can't change agent — choose it in the launcher.", {
+        message_thread_id: thread,
+      });
+      return;
+    }
+    const current = nextProvider ?? cfg.provider;
+    void askPick(bot, {
+      threadId: thread,
+      title: "agent for the next session",
+      groups: [providerGroup(current, cfg.provider, cfg.openrouterEnabled)],
+    })
+      .then(({ picks }) =>
+        applyProvider(ctx, thread, asProvider(picks.p ?? null, cfg.provider), false),
+      )
+      .catch((err) => console.warn(`[${cmd}] applying the picked value failed:`, String(err)));
+    return;
+  }
+
+  if (cmd === "/effort" || cmd === "/model") {
+    const topic = isLauncher(thread) ? undefined : getTopic(thread!);
+    const provider = topic?.provider ?? nextProvider ?? cfg.provider;
+    const arg = args.split(/\s+/)[0];
+    const isEffort = cmd === "/effort";
+    if (isEffort && provider === "openrouter") {
+      await replySilently(
+        ctx,
+        "⚠️ OpenRouter reasoning is configured in OPENROUTER_PRESETS; choose a preset with `/model`.",
+        { message_thread_id: thread, parse_mode: "Markdown" },
+      );
+      return;
+    }
+    if (arg) {
+      const value = isEffort ? parseEffort(arg, provider) : parseModel(arg, provider);
+      if (value === undefined) {
+        await replySilently(ctx, isEffort ? effortUsage(provider) : modelUsage(provider), {
+          message_thread_id: thread,
+        });
+        return;
+      }
+      if (isEffort) await applyEffort(ctx, thread, value as Effort);
+      else await applyModel(ctx, thread, value as Model);
+      return;
+    }
+    // Nothing named — same effect, chosen with the buttons instead. Detached
+    // like the launch picker: waiting on a button from inside a handler would
+    // block the very callback that settles it.
+    const inLauncher = isLauncher(thread);
+    const where = inLauncher ? "the next session" : "this topic";
+    const cwd = topic?.cwd ?? cfg.defaultCwd;
+    const nextCodex =
+      !isEffort && provider === "codex" && inLauncher
+        ? codexPresetPicker(nextModel, nextEffort, nextServiceTier).selected(null)
+        : undefined;
+    const codexModels =
+      !isEffort && provider === "codex"
+        ? codexModelPicker(
+            nextCodex?.model ?? topic?.model ?? null,
+            nextCodex?.effort ?? topic?.effort ?? null,
+            nextCodex?.serviceTier ?? topic?.service_tier ?? null,
+          )
+        : undefined;
+    const openrouterModels =
+      !isEffort && provider === "openrouter"
+        ? openRouterModelPicker(
+            inLauncher
+              ? nextOpenRouterSettings ?? (nextModel ? { model: nextModel } : null)
+              : topic?.openrouter_settings ?? (topic?.model ? { model: topic.model } : null),
+            cfg.openrouterModel,
+            cfg.openrouterPresets,
+          )
+        : undefined;
+    void askPick(bot, {
+      threadId: thread,
+      title: `${isEffort ? "effort" : "model"} for ${where}`,
+      groups: isEffort
+        ? [
+            effortGroup(
+              inLauncher ? (nextEffort ?? null) : (topic?.effort ?? null),
+              cwd,
+              provider,
+            ),
+          ]
+        : [
+            codexModels?.group ??
+              openrouterModels?.group ??
+              modelGroup(inLauncher ? (nextModel ?? null) : (topic?.model ?? null), provider),
+          ],
+    })
+      .then(({ picks }) => {
+        if (isEffort) return applyEffort(ctx, thread, asEffort(picks.e ?? null, provider), false);
+        const choice = codexModels?.selected(picks.m ?? null);
+        if (choice) {
+          return choice.kind === "preset"
+            ? applyCodexPreset(ctx, thread, choice.preset)
+            : applyModel(ctx, thread, choice.model, false);
+        }
+        const openrouterChoice = openrouterModels?.selected(picks.o ?? null);
+        if (openrouterChoice) return applyOpenRouterSettings(ctx, thread, openrouterChoice.settings, false);
+        return applyModel(ctx, thread, asModel(picks.m ?? null), false);
+      })
+      .catch((err) => console.warn(`[${cmd}] applying the picked value failed:`, String(err)));
+    return;
+  }
+
+  if (cmd === "/stop") {
+    const s = thread !== undefined && !isLauncher(thread) ? liveSession(thread) : undefined;
+    let stopped = false;
+    if (s) {
+      try {
+        stopped = await s.interrupt();
+      } catch (err) {
+        console.warn(`[stop] interrupting ${thread} failed:`, String(err));
+        await replySilently(ctx, `⚠️ couldn't stop it: ${String(err)}`, {
+          message_thread_id: thread,
+        });
+        return;
+      }
+    }
+    if (!stopped) {
+      await replySilently(ctx, "⚠️ nothing running here.", { message_thread_id: thread });
+    }
+    return;
+  }
+
+  if (cmd !== "/usage") return;
+
+  // In a task topic -> that topic's usage; in the launcher -> grand total.
+  const t = thread !== undefined ? getTopic(thread) : undefined;
+  const local = t ? topicUsageText(t) : totalsText();
+
+  const provider = t?.provider ?? nextProvider ?? cfg.provider;
+  if (provider === "openrouter") {
+    await replySilently(ctx, local, { message_thread_id: thread, parse_mode: "Markdown" });
+    return;
+  }
+  // Asking the provider for plan limits can take a few seconds (and may have
+  // to start a child), so post the local tally first and fill the rest in.
+  const sent = await replySilently(ctx, `${local}\n\n⏳ _checking plan limits…_`, {
+    message_thread_id: thread,
+    parse_mode: "Markdown",
+  });
+
+  let plan: string;
+  try {
+    const limits =
+      provider === "codex" ? await fetchCodexPlanLimits() : await fetchPlanLimits(anyLiveQuery());
+    plan = planLimitsText(limits, providerLabel(provider));
+  } catch (err) {
+    console.warn("[usage] plan limits failed:", String(err));
+    plan = "_plan limits unavailable_";
+  }
+  try {
+    await ctx.api.editMessageText(ctx.chat.id, sent.message_id, `${local}\n\n${plan}`, {
+      parse_mode: "Markdown",
+    });
+  } catch (err) {
+    console.warn("[usage] editing the reply failed:", String(err));
+  }
+  return;
+}
+
+let botUsername = "";
+
+const cancelTurnKeyboard = (threadId: number): InlineKeyboard =>
+  new InlineKeyboard().text("✖️ Cancel", `s:${threadId}`);
+
+/** A topic's permanent button stops whichever turn is currently running. */
+function registerSessionCancelButtons(): void {
+  bot.on("callback_query:data", async (ctx, next) => {
+    const match = /^s:(\d+)$/.exec(ctx.callbackQuery.data);
+    if (!match) return next();
+    if (ctx.from.id !== cfg.allowedUserId || ctx.callbackQuery.message?.chat.id !== cfg.chatId) {
+      return void ctx.answerCallbackQuery({ text: "Not authorized." }).catch(() => {});
+    }
+
+    const threadId = Number(match[1]);
+    const session = liveSession(threadId);
+    let stopped = false;
+    try {
+      stopped = (await session?.interrupt()) ?? false;
+    } catch (err) {
+      console.warn(`[cancel] interrupting ${threadId} failed:`, String(err));
+      return void ctx.answerCallbackQuery({ text: "Couldn't stop the turn." }).catch(() => {});
+    }
+
+    if (!stopped) {
+      return void ctx.answerCallbackQuery({ text: "Nothing is running." }).catch(() => {});
+    }
+    await ctx.answerCallbackQuery({ text: "Stopped" }).catch(() => {});
+  });
+}
+
+/** Provider-neutral message; each SDK gets the image representation it accepts. */
+const contentOf = (text: string, images: ImagePart[]): AgentInput => ({ text, images });
+
+/**
+ * Spin up a new topic + session for a launcher message.
+ *
+ * Detached on purpose: grammy handles updates one at a time, and this waits on
+ * the effort picker — buttons whose presses arrive as updates of their own.
+ * Awaiting it inside the handler would stall the very callbacks it waits for.
+ * Each launcher message gets its own picker, so two launches never queue behind
+ * each other.
+ */
+async function launch(
+  ctx: any,
+  text: string,
+  images: ImagePart[],
+  sources: any[] = [ctx],
+): Promise<void> {
+  const { cwd, prompt } = resolveCwd(text);
+  const title = placeholderTitle(prompt || "image");
+  const provider = nextProvider ?? cfg.provider;
+
+  // Nothing exists yet: the provider, model, and effort are chosen first — in
+  // one picker, so a launch costs one message and one wait — and only then is
+  // the topic created. An untouched picker falls through in seconds, so a
+  // launch nobody answers still starts, but once the user reaches for a button
+  // the launch waits for them to finish.
+  const presetPicker =
+    provider === "codex" || provider === "openrouter"
+      ? launchPresetPicker(
+          provider,
+          nextModel,
+          nextEffort,
+          nextServiceTier,
+          provider === "openrouter"
+            ? nextOpenRouterSettings ?? (nextModel ? { model: nextModel } : null)
+            : nextOpenRouterSettings,
+        )
+      : undefined;
+  const { picks, cancelled, messageId } = await askPick(bot, {
+    threadId: cfg.launcherThreadId,
+    title: `«${title}»`,
+    groups: presetPicker
+      ? [presetPicker.group]
+      : provider === "codex"
+        ? [
+            modelGroup(nextModel ?? null, provider),
+            effortGroup(nextEffort ?? null, cwd, provider),
+            serviceTierGroup(nextServiceTier ?? null),
+          ]
+        : [modelGroup(nextModel ?? null, provider), effortGroup(nextEffort ?? null, cwd, provider)],
+    firstWaitMs: LAUNCH_WAIT_MS,
+    rewritten: true,
+    allowCancel: true,
+  });
+  if (cancelled) return;
+  const launchChoice = presetPicker?.selected(picks.r ?? null);
+  const selectedProvider = launchChoice?.provider ?? provider;
+  const preset = launchChoice?.provider === "codex" ? launchChoice.codex : undefined;
+  const openrouterSettings =
+    launchChoice?.provider === "openrouter" ? launchChoice.openrouter : undefined;
+  const effort = selectedProvider === "openrouter"
+    ? null
+    : preset?.effort ?? asEffort(picks.e ?? null, selectedProvider);
+  const model = selectedProvider === "openrouter"
+    ? openrouterSettings?.model ?? null
+    : preset?.model ?? asModel(picks.m ?? null);
+  const serviceTier: ServiceTier = selectedProvider === "codex"
+    ? preset?.serviceTier ?? asServiceTier(picks.s ?? null)
+    : null;
+  const progress = defaultProgress;
+  const toolcalls = nextToolcalls;
+  nextToolcalls = "off";
+  nextEffort = undefined;
+  nextModel = undefined;
+  nextServiceTier = undefined;
+  nextOpenRouterSettings = undefined;
+  nextProvider = undefined;
+
+  let topic;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      topic = await ctx.api.createForumTopic(cfg.chatId, title);
+      break;
+    } catch (err) {
+      if (!(err instanceof HttpError) || attempt >= TOPIC_CREATE_ATTEMPTS) throw err;
+      console.warn(
+        `[launch] createForumTopic failed; retry ${attempt}/${TOPIC_CREATE_ATTEMPTS - 1} ` +
+          `in ${TOPIC_CREATE_RETRY_DELAY_MS}ms:`,
+        String(err),
+      );
+      await delay(TOPIC_CREATE_RETRY_DELAY_MS);
+    }
+  }
+  const tid = topic.message_thread_id;
+  createTopic({
+    threadId: tid,
+    cwd,
+    title,
+    provider: selectedProvider,
+    effort,
+    model,
+    serviceTier,
+    openrouterSettings: openrouterSettings ?? null,
+  });
+  setActivity(tid, "progress", progress);
+  setActivity(tid, "toolcalls", toolcalls);
+
+  // The picker becomes the launch line: one message for one launch, rather than
+  // the settled picker and a "→ …" note sitting one above the other.
+  const line =
+    `→ «${title}»  (cwd: ${cwd})` +
+    (preset
+      ? `  ⚙️ Codex · ${preset.name}`
+      : openrouterSettings?.preset
+        ? `  🌐 OpenRouter · ${openrouterSettings.preset}`
+      : `  🤖 ${modelLabel(model, defaultModel(selectedProvider), selectedProvider)}` +
+        (selectedProvider === "openrouter" ? "" : `  ⚙️ ${effortLabel(effort, defaultEffort(cwd, selectedProvider))}`) +
+        (selectedProvider === "codex" ? `  🚀 ${serviceTierLabel(serviceTier)}` : ""));
+  const posted =
+    messageId !== null &&
+    (await ctx.api
+      .editMessageText(cfg.chatId, messageId, line)
+      .then(() => true)
+      .catch(() => false));
+  if (!posted) {
+    await replySilently(ctx, line, { message_thread_id: cfg.launcherThreadId });
+  }
+
+  // The launcher message lives in another topic — repeat it here so the
+  // thread reads as a whole conversation.
+  const echoText = () =>
+    ctx.api.sendMessage(cfg.chatId, prompt, {
+      message_thread_id: tid,
+      disable_notification: true,
+      reply_markup: cancelTurnKeyboard(tid),
+    });
+  try {
+    // Attachments are copied verbatim. For an album, the first successful copy
+    // owns the permanent stop button and every source item stays visible.
+    if (sources.some((source) => source.message.text === undefined)) {
+      let copied = false;
+      for (const source of sources) {
+        if (source.message.text !== undefined) continue;
+        try {
+          await ctx.api.copyMessage(cfg.chatId, cfg.chatId, source.message.message_id, {
+            message_thread_id: tid,
+            disable_notification: true,
+            ...(!copied ? { reply_markup: cancelTurnKeyboard(tid) } : {}),
+          });
+          copied = true;
+        } catch (err) {
+          console.warn(`[launch] copying message ${source.message.message_id} failed:`, String(err));
+        }
+      }
+      if (!copied) await echoText();
+    } else await echoText();
+  } catch (err) {
+    console.warn(`[launch] echoing the prompt into ${tid} failed:`, String(err));
+  }
+
+  await sessionFor(bot, {
+    thread_id: tid,
+    cwd,
+    session_id: null,
+    provider: selectedProvider,
+    effort,
+    model,
+    service_tier: serviceTier,
+    openrouter_settings: openrouterSettings ?? null,
+  }).send(contentOf(prompt, images));
+}
+
+/** Route one inbound user message (with any images already downloaded). */
+async function route(
+  ctx: any,
+  text: string,
+  images: ImagePart[],
+  sources: any[] = [ctx],
+): Promise<void> {
+  const thread: number | undefined = ctx.message.message_thread_id;
+
+  // ---- A) Launcher: spin up a new topic + session -----------------------
+  if (isLauncher(thread)) {
+    void launch(ctx, text, images, sources).catch(async (err) => {
+      console.error("[launch] failed:", err);
+      await replySilently(ctx, `❌ couldn't start that session: ${String(err)}`, {
+        message_thread_id: cfg.launcherThreadId,
+      }).catch(() => {});
+    });
+    return;
+  }
+
+  // ---- B) Existing task topic: resume its session -----------------------
+  if (thread === undefined) return; // handled by launcher branch above
+  const t = getTopic(thread);
+  if (!t) return; // not a topic we manage
+
+  if (t.status === "closed") {
+    try {
+      await bot.api.reopenForumTopic(cfg.chatId, thread);
+    } catch (err) {
+      console.warn(`[reopen] failed for ${thread}:`, String(err));
+    }
+    setStatus(thread, "active");
+  }
+
+  // Claude receives this at its next step. Codex deliberately queues ordinary
+  // messages as the next turn; only `/btw` forks alongside an active turn.
+  await sessionFor(bot, t).send(contentOf(text, images));
+}
+
+/** Single-user gate + right-forum check, shared by every message handler. */
+const mine = (ctx: any): boolean =>
+  ctx.from?.id === cfg.allowedUserId && ctx.chat.id === cfg.chatId;
+
+// Consume slash commands before any text/media can reach an agent, allowing
+// cwd prefixes in the launcher. Albums are checked together below.
+bot.on("message", async (ctx, next) => {
+  if (!mine(ctx)) return;
+  if (ctx.message.media_group_id) return next();
+  const parsed = parseCommand(
+    ctx.message.text ?? ctx.message.caption ?? "",
+    botUsername,
+    isLauncher(ctx.message.message_thread_id),
+  );
+  if (parsed.kind === "prompt") return next();
+  if (parsed.kind === "command") {
+    await handleCommand(ctx, ctx.message.message_thread_id, parsed);
+  }
+});
+
+bot.on("message:text", async (ctx) => {
+  if (!mine(ctx)) return;
+  await route(ctx, ctx.message.text, []);
+});
+
+/** Caption first, then what came with it: the caption is what titles a topic. */
+const withNote = (caption: string, note: string): string =>
+  caption ? `${caption}\n\n${note}` : note;
+
+/** Turn one non-text Telegram update into provider-neutral agent input. */
+async function contentFrom(ctx: any): Promise<AgentInput | null> {
+  const thread = ctx.message.message_thread_id;
+  const caption = ctx.message.caption?.trim() ?? "";
+  const inbound = classify(ctx.message);
+  if (!inbound) {
+    // Telegram's own chatter carries nothing to pass on. Anything else that
+    // got this far is a real message we can't read, and going quiet about it
+    // is exactly how a message full of intent reaches nobody.
+    if (isService(ctx.message)) return null;
+    await replySilently(ctx, "⚠️ I can't read that kind of message — try sending it as a file.", {
+      message_thread_id: thread,
+    }).catch(() => {});
+    return null;
+  }
+
+  if (inbound.as === "text") {
+    return contentOf(withNote(caption, `[${inbound.label}]`), []);
+  }
+
+  if (inbound.as === "image") {
+    let image: ImagePart;
+    try {
+      image = await fetchImage(ctx.api, inbound.fileId, inbound.mime, inbound.uniqueId);
+    } catch (err) {
+      console.warn("[media] fetching the image failed:", String(err));
+      await replySilently(ctx, `⚠️ couldn't fetch that image: ${String(err)}`, {
+        message_thread_id: thread,
+      }).catch(() => {});
+      return null;
+    }
+    return contentOf(caption, [image]);
+  }
+
+  // Anything with bytes behind it that the model can't look at: saved next to
+  // the bot, named by what it is, and handed over as a path.
+  let file: DocumentPart;
+  try {
+    file = await fetchDocument(ctx.api, inbound);
+  } catch (err) {
+    console.warn(`[media] fetching the ${inbound.kind} failed:`, String(err));
+    await replySilently(ctx, `⚠️ couldn't fetch that ${inbound.kind}: ${String(err)}`, {
+      message_thread_id: thread,
+    }).catch(() => {});
+    return null;
+  }
+  return contentOf(
+    withNote(caption, `[${inbound.label}, ${humanSize(file.size)}]\n${file.path}`),
+    [],
+  );
+}
+
+async function routeMediaGroup(sources: any[]): Promise<void> {
+  for (const source of sources) {
+    const parsed = parseCommand(
+      source.message.caption ?? "",
+      botUsername,
+      isLauncher(source.message.message_thread_id),
+    );
+    if (parsed.kind === "prompt") continue;
+    if (parsed.kind === "command") {
+      await handleCommand(source, source.message.message_thread_id, parsed);
+    }
+    return;
+  }
+  const parts = (await Promise.all(sources.map(contentFrom))).filter(
+    (part): part is AgentInput => part !== null,
+  );
+  if (!parts.length) return;
+  await route(
+    sources[0],
+    parts.map((part) => part.text).filter(Boolean).join("\n\n"),
+    parts.flatMap((part) => part.images),
+    sources,
+  );
+}
+
+// Telegram emits every album item as a separate update and has no explicit
+// final marker. Half a second after the last item is the earliest safe send.
+const mediaGroups = new MediaGroupCollector<any>(500, (sources) => {
+  void routeMediaGroup(sources).catch((err) => console.error("[media-group] failed:", err));
+});
+
+bot.on("message", async (ctx) => {
+  if (!mine(ctx)) return;
+  const groupId = ctx.message.media_group_id;
+  if (groupId) {
+    const key = `${ctx.chat.id}:${ctx.message.message_thread_id ?? 0}:${groupId}`;
+    mediaGroups.add(key, ctx);
+    return;
+  }
+
+  const content = await contentFrom(ctx);
+  if (content) await route(ctx, content.text, content.images);
+});
+
+bot.catch((err) => {
+  console.error("[bot] unhandled error:", err.error);
+});
+
+async function main() {
+  const me = await bot.api.getMe();
+  botUsername = me.username;
+  console.log(`[bot] running as @${me.username}`);
+  console.log(
+    `[bot] forum chat ${cfg.chatId}, launcher thread ${cfg.launcherThreadId ?? "General"}`,
+  );
+  console.log(
+    `[bot] permission=${cfg.permission} provider=${cfg.provider} ` +
+      `model=${defaultModel(cfg.provider)}`,
+  );
+
+  await bot.api.setMyCommands([...botCommands]);
+
+  // Each callback owner passes unknown buttons to the next one. Permission
+  // prompts are last and answer anything left over.
+  registerPickerButtons(bot);
+  registerSessionCancelButtons();
+  registerPermissionButtons(bot);
+  startSweep(bot);
+  // From here on `/telegramify` will adopt sessions into this forum.
+  startHeartbeat();
+  await bot.start({ allowed_updates: ["message", "callback_query"] });
+}
+
+main().catch((err) => {
+  console.error("[fatal]", err);
+  process.exit(1);
+});

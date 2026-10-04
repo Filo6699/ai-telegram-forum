@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { tmpdir } from "node:os";
-import { botCommands, parseCommand } from "../src/commands.ts";
+import { botCommands, parseCommand } from "../src/telegram/commands.ts";
 
 const parse = (text: string) => parseCommand(text, "ThisBot");
 

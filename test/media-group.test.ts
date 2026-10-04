@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MediaGroupCollector } from "../src/media-group.ts";
+import { MediaGroupCollector } from "../src/telegram/media-group.ts";
 
 test("collects album updates in order and flushes once", async () => {
   let resolve!: (items: number[]) => void;

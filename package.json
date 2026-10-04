@@ -32,9 +32,9 @@
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "test": "node --test --import tsx test/*.test.ts",
-    "telegramify": "tsx src/telegramify.ts",
+    "telegramify": "tsx src/cli/telegramify.ts",
     "codexify": "npm run telegramify -- --provider codex",
-    "install-command": "tsx src/install-command.ts",
+    "install-command": "tsx src/cli/install-command.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

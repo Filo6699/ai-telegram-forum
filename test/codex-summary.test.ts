@@ -1,21 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cfg } from "../src/config.ts";
+import { cfg } from "../src/config/env.ts";
 import {
   estimateCodexCredits,
   estimateCodexWeeklyPercent,
   formatCodexWeeklyPercent,
-} from "../src/codex-quota.ts";
+} from "../src/providers/codex/quota.ts";
 import {
   mergeCodexSessionUsage,
   parseCodexRollout,
   parseCodexSessionUsage,
-} from "../src/codex-session-usage.ts";
-import { formatCodexWeeklyPart } from "../src/codex-summary.ts";
-import { compactMs, fmtTokens } from "../src/fmt.ts";
-import { modelGroup, parseModel } from "../src/model.ts";
-import { codexModelPicker, codexPresetName } from "../src/preset.ts";
-import { asServiceTier, serviceTierGroup } from "../src/preset-config.ts";
+} from "../src/providers/codex/session-usage.ts";
+import { formatCodexWeeklyPart } from "../src/providers/codex/summary.ts";
+import { compactMs, fmtTokens } from "../src/shared/fmt.ts";
+import { modelGroup, parseModel } from "../src/config/model.ts";
+import { codexModelPicker, codexPresetName } from "../src/telegram/codex-presets.ts";
+import { asServiceTier, serviceTierGroup } from "../src/config/codex-presets.ts";
 
 test("native Codex usage aggregates every response and estimates weekly session spend", () => {
   const lines = [

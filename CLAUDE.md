@@ -5,35 +5,23 @@ Read `README.md` for the user-facing picture; this file is the working contract.
 
 ## Layout
 
-| File | Role |
+The source is organized by responsibility. See [docs/architecture.md](docs/architecture.md)
+for dependency boundaries and where new features belong.
+
+| Directory / entry point | Responsibility |
 |---|---|
-| `src/index.ts`  | bot entry, auth, routing by `message_thread_id` |
-| `src/session.ts` | one live SDK session per topic; turn lifecycle |
-| `src/telegramify.ts` | CLI: adopt an existing on-disk session into a new topic |
-| `src/codexify.ts` | CLI: adopt an existing Codex thread into a new topic |
-| `src/install-command.ts` | writes the `/telegramify` slash command for Claude Code |
-| `src/heartbeat.ts` | broker liveness file: written by the bot, read by the CLI |
-| `src/permission.ts` | tool approval prompts + their inline buttons |
-| `src/picker.ts` | the inline-button picker `/effort` and `/model` are built on |
-| `src/effort.ts` | reasoning-effort buttons, `/effort`, level parsing |
-| `src/model.ts` | model buttons, `/model`, model-name parsing |
-| `src/claude.ts` | SDK options: model, effort, permission policy, usage accounting |
-| `src/codex.ts` | Codex SDK options, thread/input/event adaptation |
-| `src/codex-app-server.ts` | one-shot Codex app-server requests |
-| `src/codex-limits.ts` | Codex plan limits through the local app-server |
-| `src/codex-tg-server.ts` | topic-bound stdio MCP server for Codex |
-| `src/provider.ts` | provider selection and labels |
-| `src/tg-tools.ts` | shared send implementation + Claude's in-process MCP server |
-| `src/status.ts` | the live status line / turn summary message |
-| `src/limits.ts` | plan rate limits (5-hour / weekly) behind `/usage` |
-| `src/render.ts` | markdown → topic messages, with format fallback |
-| `src/fmt.ts`    | duration & token formatting |
-| `src/media.ts`  | inbound attachments (images → blocks, files → `data/inbox` paths, the rest → words); outbound file paths → uploads |
-| `src/html.ts`   | markdown → Telegram HTML (fallback when MarkdownV2 fails) |
-| `src/cwd.ts`    | `@alias` / `/path` prefix parsing, titles |
-| `src/db.ts`     | SQLite state (`node:sqlite`) |
-| `src/sweep.ts`  | delete idle Telegram topics (never their sessions) |
-| `src/config.ts` | env loading & validation |
+| `src/index.ts` | Stable bot entry point; imports application wiring |
+| `src/codex-tg-server.ts` | Stable MCP subprocess entry point for running Codex sessions |
+| `src/app/` | Bot routing, authentication, heartbeat, idle-topic sweep |
+| `src/cli/` | Session adoption (`telegramify`, `codexify`) and command installation |
+| `src/sessions/` | Topic lifecycle, common agent contracts, factory, usage and limit types |
+| `src/providers/claude/` | Claude SDK options, session runner, plan limits |
+| `src/providers/codex/` | Codex session runner, app-server clients, MCP process, quota accounting |
+| `src/providers/openrouter/` | OpenRouter client, session loop, tools, append-only history |
+| `src/telegram/` | Commands, pickers, permissions, attachments, rendering, agent send tool |
+| `src/config/` | Environment loading, provider/model/effort settings and preset parsing |
+| `src/storage/` | SQLite topic state and usage persistence |
+| `src/shared/` | Provider-independent formatting helpers |
 
 ## Commands
 

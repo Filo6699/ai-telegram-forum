@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { codexSideBoundaryItem, codexSideForkParams } from "../src/codex.ts";
-import { TopicRenderer } from "../src/render.ts";
+import { codexSideBoundaryItem, codexSideForkParams } from "../src/providers/codex/options.ts";
+import { TopicRenderer } from "../src/telegram/render.ts";
 
 test("Codex /btw uses an ephemeral metadata-only fork with Telegram disabled", () => {
   const params = codexSideForkParams({

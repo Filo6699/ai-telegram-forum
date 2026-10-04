@@ -217,7 +217,8 @@ npm run typecheck  # check TypeScript
 npm test           # run tests
 ```
 
-See [AGENTS.md](./AGENTS.md) for the source layout and contribution rules.
+See [docs/architecture.md](./docs/architecture.md) for module boundaries and
+[AGENTS.md](./AGENTS.md) for contribution rules.
 
 ## License
 

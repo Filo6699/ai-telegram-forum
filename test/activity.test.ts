@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { progressInstruction, toolcallText } from "../src/activity.ts";
+import { progressInstruction, toolcallText } from "../src/telegram/activity.ts";
 
 test("tool visibility separates file edits from other activity", () => {
   assert.equal(toolcallText("off", "Write", {}), null);

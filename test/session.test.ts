@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sideTurnReady } from "../src/side-turn.ts";
+import { sideTurnReady } from "../src/sessions/side-turn.ts";
 
 test("a live first turn is ready for /btw before its session id is persisted", () => {
   assert.equal(sideTurnReady(null, true), true);

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cfg } from "../src/config.ts";
-import { launchPresetPicker } from "../src/launch-preset.ts";
-import { parseCodexPresets, parseDefaultCodexPreset } from "../src/preset-config.ts";
+import { cfg } from "../src/config/env.ts";
+import { launchPresetPicker } from "../src/telegram/launch-preset.ts";
+import { parseCodexPresets, parseDefaultCodexPreset } from "../src/config/codex-presets.ts";
 
 test("Codex has no built-in presets", () => {
   const presets = parseCodexPresets(undefined);

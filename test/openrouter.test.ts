@@ -3,8 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { normalizeOpenRouterModel } from "../src/openrouter-model.ts";
-import { openRouterModelPicker, parseOpenRouterPresets } from "../src/openrouter-config.ts";
+import { normalizeOpenRouterModel } from "../src/config/openrouter-model.ts";
+import { openRouterModelPicker, parseOpenRouterPresets } from "../src/config/openrouter-presets.ts";
 
 test("OpenRouter model ids preserve slash and :free when copied from links", () => {
   assert.equal(normalizeOpenRouterModel("openrouter/free"), "openrouter/free");
@@ -45,7 +45,7 @@ test("OpenRouter client retries 429 and never sends an empty-key request", async
   process.env.OPENROUTER_API_KEY = "test-key";
   const historyRoot = await mkdtemp(join(tmpdir(), "openrouter-history-"));
   process.env.OPENROUTER_HISTORY_PATH = historyRoot;
-  const { OpenRouterClient, openRouterUsage } = await import("../src/openrouter.ts");
+  const { OpenRouterClient, openRouterUsage } = await import("../src/providers/openrouter/client.ts");
 
   let calls = 0;
   const client = new OpenRouterClient("test-key", async (_url, init) => {
@@ -107,7 +107,7 @@ test("OpenRouter agent loop persists tool messages and resumes the same history"
     return new Response(JSON.stringify(responses.shift()), { status: 200 });
   }) as typeof fetch;
   try {
-    const { OpenRouterAgentSession } = await import("../src/openrouter-session.ts");
+    const { OpenRouterAgentSession } = await import("../src/providers/openrouter/session.ts");
     const makeSession = (sessionId: string | null) => {
       const sent: string[] = [];
       let resolveEnded!: (result: any) => void;
@@ -197,7 +197,7 @@ test("OpenRouter stop aborts the pending request and keeps prior usage", async (
     });
   }) as typeof fetch;
   try {
-    const { OpenRouterAgentSession } = await import("../src/openrouter-session.ts");
+    const { OpenRouterAgentSession } = await import("../src/providers/openrouter/session.ts");
     const dir = await mkdtemp(join(tmpdir(), "openrouter-stop-"));
     let resolveEnded!: (result: any) => void;
     const ended = new Promise<any>((resolve) => (resolveEnded = resolve));
@@ -244,7 +244,7 @@ test("OpenRouter executor performs file tools and shell through the shared tool 
   process.env.ALLOWED_USER_ID ??= "1";
   process.env.DEFAULT_CWD ??= process.cwd();
   process.env.PERMISSION = "bypass";
-  const { executeOpenRouterTool } = await import("../src/openrouter-tools.ts");
+  const { executeOpenRouterTool } = await import("../src/providers/openrouter/tools.ts");
   const dir = await mkdtemp(join(tmpdir(), "openrouter-tools-"));
   const ctx = {
     bot: {} as any,
