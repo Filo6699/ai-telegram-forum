@@ -26,7 +26,7 @@ export function resolveCwd(text: string): Resolved {
     return { cwd: cfg.defaultCwd, prompt: trimmed }; // unknown alias -> keep verbatim
   }
 
-  const path = trimmed.match(/^(\/\S+)\s+([\s\S]+)$/);
+  const path = trimmed.match(/^(\/\S*)\s+([\s\S]+)$/);
   if (path) {
     const [, dir, rest] = path as unknown as [string, string, string];
     return { cwd: dir, prompt: rest };

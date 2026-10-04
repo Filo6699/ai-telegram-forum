@@ -93,6 +93,7 @@ Send tasks in the launcher:
 ```text
 fix the failing login test
 @myrepo add a health endpoint
+/srv/app explain how authentication works
 ```
 
 The first uses `DEFAULT_CWD`. The second uses an alias from `PROJECTS` in `.env`:
@@ -101,8 +102,8 @@ The first uses `DEFAULT_CWD`. The second uses an alias from `PROJECTS` in `.env`
 PROJECTS={"myrepo":"/home/you/projects/myrepo"}
 ```
 
-The new topic remembers the directory, so you only need the alias prefix when
-starting a session.
+The third uses an absolute path. The new topic remembers the directory, so you
+only need the prefix when starting a session.
 
 Within a topic, send messages, photos, or files. Images go to the agent as
 images; other attachments are saved locally and passed as file paths. The agent
@@ -116,9 +117,12 @@ or `/usa` runs `/usage`. Matching completes prefixes first, then chooses the
 smallest edit distance (including swapped adjacent letters), with no threshold.
 Ties follow the command menu order. Arguments are preserved; `/agent` remains
 an alias for `/provider`. Commands addressed to another bot are ignored.
-Every message or attachment caption starting with `/` is handled as a command
-and never forwarded as a normal agent prompt. Use `@alias` to select a project
-in the launcher instead of a leading absolute path.
+Messages and attachment captions starting with `/` are handled as commands and
+never forwarded as normal agent prompts. In the launcher (new session chat),
+`/path <task>` selects a working directory instead: paths containing another
+slash, the root `/`, and existing directories such as `/tmp` are accepted.
+This also works in attachment captions. Inside session topics, slash messages
+remain commands.
 
 - `/provider` — choose Claude, Codex, or OpenRouter for the next session.
   Existing topics keep their provider.

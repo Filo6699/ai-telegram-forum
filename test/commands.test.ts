@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { tmpdir } from "node:os";
 import { botCommands, parseCommand } from "../src/commands.ts";
 
 const parse = (text: string) => parseCommand(text, "ThisBot");
@@ -68,5 +69,19 @@ test("bare slashes and commands for another bot are consumed without a prompt", 
 test("ordinary messages, alias prefixes, and slashes inside a prompt reach the agent", () => {
   for (const input of ["", "hello", "@myrepo fix tests", "explain /usage", "look at\n/srv/app"]) {
     assert.deepEqual(parse(input), { kind: "prompt" });
+  }
+});
+
+test("launcher paths pass through for cwd resolution, including media captions", () => {
+  for (const path of ["/srv/app", "/new/project/", "/srv/user@host/app", "/", tmpdir()]) {
+    const input = `  ${path} explain this\nwith details  `;
+    assert.deepEqual(parseCommand(input, "ThisBot", true), { kind: "prompt" });
+    assert.notEqual(parse(input).kind, "prompt");
+  }
+});
+
+test("launcher commands still match typos and consume commands for other bots", () => {
+  for (const input of ["/modee sonnet", "/usa", "/usaeg", "/usage@OtherBot", "/", "/zzzzzzzz high"]) {
+    assert.deepEqual(parseCommand(input, "ThisBot", true), parse(input));
   }
 });

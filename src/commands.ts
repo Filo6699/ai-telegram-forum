@@ -1,3 +1,5 @@
+import { statSync } from "node:fs";
+
 /** Shared by command matching and Telegram's command menu. Order breaks ties. */
 export const botCommands = [
   { command: "usage", description: "Tokens/cost here (or all in the launcher) + plan limits" },
@@ -46,11 +48,30 @@ function distance(input: string, name: string): number {
   return previous[name.length]!;
 }
 
-/** Every leading slash is consumed; nonempty names always match, without a cutoff. */
-export function parseCommand(text: string, botUsername: string): ParsedCommand {
+/** Recognize path syntax and existing single-component directories such as /tmp. */
+function isDirectoryPrefix(token: string): boolean {
+  if (token === "/" || token.slice(1).includes("/")) return true;
+  try {
+    return statSync(token, { throwIfNoEntry: false })?.isDirectory() ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/** Slash messages match without a cutoff; the launcher can also accept cwd prefixes. */
+export function parseCommand(text: string, botUsername: string, allowPaths = false): ParsedCommand {
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) return { kind: "prompt" };
   const [, token = "", args = ""] = /^\/(\S*)(?:\s+([\s\S]*))?$/.exec(trimmed)!;
+  // Exact commands keep their meaning even if a same-named directory exists.
+  // Check the full path before bot addressing: directory names may contain @.
+  if (
+    allowPaths && args &&
+    !candidates.some((candidate) => candidate.name === token.toLowerCase()) &&
+    isDirectoryPrefix(`/${token}`)
+  ) {
+    return { kind: "prompt" };
+  }
   const [rawName = "", addressee] = token.split("@");
   if (addressee !== undefined && addressee.toLowerCase() !== botUsername.toLowerCase()) {
     return { kind: "ignored" };

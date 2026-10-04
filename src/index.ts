@@ -890,12 +890,16 @@ async function route(
 const mine = (ctx: any): boolean =>
   ctx.from?.id === cfg.allowedUserId && ctx.chat.id === cfg.chatId;
 
-// Consume slash messages before any text/media can reach an agent. Albums
-// are checked together below so a command caption consumes the whole album.
+// Consume slash commands before any text/media can reach an agent, allowing
+// cwd prefixes in the launcher. Albums are checked together below.
 bot.on("message", async (ctx, next) => {
   if (!mine(ctx)) return;
   if (ctx.message.media_group_id) return next();
-  const parsed = parseCommand(ctx.message.text ?? ctx.message.caption ?? "", botUsername);
+  const parsed = parseCommand(
+    ctx.message.text ?? ctx.message.caption ?? "",
+    botUsername,
+    isLauncher(ctx.message.message_thread_id),
+  );
   if (parsed.kind === "prompt") return next();
   if (parsed.kind === "command") {
     await handleCommand(ctx, ctx.message.message_thread_id, parsed);
@@ -965,7 +969,11 @@ async function contentFrom(ctx: any): Promise<AgentInput | null> {
 
 async function routeMediaGroup(sources: any[]): Promise<void> {
   for (const source of sources) {
-    const parsed = parseCommand(source.message.caption ?? "", botUsername);
+    const parsed = parseCommand(
+      source.message.caption ?? "",
+      botUsername,
+      isLauncher(source.message.message_thread_id),
+    );
     if (parsed.kind === "prompt") continue;
     if (parsed.kind === "command") {
       await handleCommand(source, source.message.message_thread_id, parsed);
