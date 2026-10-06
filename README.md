@@ -201,7 +201,9 @@ projects it needs.
 `PERMISSION=bypass` removes these approval checks and gives Codex full filesystem
 access. Even in `auto`, the default tool list allows file edits and shell commands.
 
-Idle topics are deleted after **7 days** (`DELETE_AFTER_HOURS`). This removes
+Idle topics are deleted after **7 days** by default (`DELETE_AFTER_HOURS=168`).
+Set `DELETE_AFTER_HOURS=0` in `.env` and restart the bot to disable automatic
+topic deletion. When enabled, deletion removes
 the Telegram topic and its database entry, but keeps agent transcripts and
 attachments on disk. Claude and Codex sessions remain resumable from the terminal.
 

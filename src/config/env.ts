@@ -39,8 +39,11 @@ function parseProjects(raw: string | undefined): Record<string, string> {
   }
 }
 
-const hours = (name: string, fallback: number) =>
-  (Number(process.env[name] ?? fallback)) * 3600_000;
+// Zero disables automatic topic deletion.
+const deleteAfterMs = Number(process.env.DELETE_AFTER_HOURS ?? 168) * 3600_000;
+if (!Number.isFinite(deleteAfterMs) || deleteAfterMs < 0) {
+  throw new Error("DELETE_AFTER_HOURS must be a finite non-negative number (0 disables deletion)");
+}
 
 const provider = parseProvider(process.env.PROVIDER ?? "claude");
 if (!provider) throw new Error(`PROVIDER must be "claude", "codex", or "openrouter"`);
@@ -94,7 +97,7 @@ export const cfg = {
     .map((t) => t.trim())
     .filter(Boolean),
 
-  deleteAfterMs: hours("DELETE_AFTER_HOURS", 168),
+  deleteAfterMs,
 
   // How long a live topic object is retained. Claude also keeps its child warm;
   // Codex uses a subprocess per turn and keeps only its resumable thread here.

@@ -56,6 +56,8 @@ async function sweepOnce(bot: Bot): Promise<void> {
 }
 
 export function startSweep(bot: Bot): void {
+  if (cfg.deleteAfterMs === 0) return;
+
   // Run once at boot: a bot restarting more often than SWEEP_INTERVAL_MS would
   // otherwise never sweep at all.
   void sweepOnce(bot);
