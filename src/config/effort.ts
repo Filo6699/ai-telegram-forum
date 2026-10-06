@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { cfg } from "./env.ts";
 import type { PickGroup, PickValue } from "../telegram/picker.ts";
 import type { Provider } from "./provider.ts";
 
@@ -54,11 +55,7 @@ export function defaultEffort(cwd: string, provider: Provider = "claude"): Effor
 }
 
 function defaultCodexEffort(): EffortLevel {
-  const fromEnv = process.env.CODEX_EFFORT;
-  if (fromEnv) {
-    const parsed = parseEffort(fromEnv, "codex");
-    if (parsed) return parsed;
-  }
+  if (cfg.codexEffort) return cfg.codexEffort;
   try {
     const toml = readFileSync(join(homedir(), ".codex", "config.toml"), "utf8");
     const value = /^\s*model_reasoning_effort\s*=\s*["']([^"']+)["']/m.exec(toml)?.[1];

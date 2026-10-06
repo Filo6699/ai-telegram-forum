@@ -8,8 +8,26 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { codexAppThreadParams } from "../src/providers/codex/options.ts";
+import { cfg } from "../src/config/env.ts";
 
 const repo = fileURLToPath(new URL("..", import.meta.url));
+
+test("configuration follows the checkout when imported from another project", () => {
+  const project = mkdtempSync(join(tmpdir(), "tg-config-cwd-"));
+  try {
+    const configUrl = new URL("../src/config/env.ts", import.meta.url).href;
+    const output = execFileSync(process.execPath, [
+      "--import", import.meta.resolve("tsx"), "--input-type=module", "--eval",
+      `const { cfg } = await import(${JSON.stringify(configUrl)});
+       console.log(JSON.stringify({ provider: cfg.provider, defaultCwd: cfg.defaultCwd, token: cfg.token }));`,
+    ], { cwd: project, encoding: "utf8", env: { ...process.env, BOT_TOKEN: "test-token" } });
+    assert.deepEqual(JSON.parse(output), {
+      provider: cfg.provider, defaultCwd: cfg.defaultCwd, token: "test-token",
+    });
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
 
 test("integration installer targets this checkout when invoked from another project", () => {
   const project = mkdtempSync(join(tmpdir(), "tg-install-"));

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,12 +8,23 @@ import test from "node:test";
 const configUrl = new URL("../src/config/env.ts", import.meta.url).href;
 const sweepUrl = new URL("../src/app/sweep.ts", import.meta.url).href;
 const dbUrl = new URL("../src/storage/db.ts", import.meta.url).href;
+const settingsUrl = new URL("../src/config/settings.ts", import.meta.url).href;
+const runtimeUrl = new URL("../src/config/runtime.ts", import.meta.url).href;
 
 function run(hours: string | undefined, script: string) {
   const cwd = mkdtempSync(join(tmpdir(), "tg-sweep-"));
   try {
+    writeFileSync(join(cwd, "config.json"), JSON.stringify(hours === undefined
+      ? {} : { DELETE_AFTER_HOURS: Number.isFinite(Number(hours)) ? Number(hours) : hours }));
+    const setup = `
+      const { loadSettings } = await import(${JSON.stringify(settingsUrl)});
+      const { buildConfig } = await import(${JSON.stringify(runtimeUrl)});
+      const settings = loadSettings("./config.json");
+      const configModule = await import(${JSON.stringify(configUrl)});
+      Object.assign(configModule.cfg, buildConfig(settings, process.env));
+    `;
     return spawnSync(process.execPath, [
-      "--import", import.meta.resolve("tsx"), "--input-type=module", "--eval", script,
+      "--import", import.meta.resolve("tsx"), "--input-type=module", "--eval", setup + script,
     ], {
       cwd,
       encoding: "utf8",
@@ -22,9 +33,7 @@ function run(hours: string | undefined, script: string) {
         BOT_TOKEN: "test-token",
         FORUM_CHAT_ID: "-100123",
         ALLOWED_USER_ID: "123",
-        DEFAULT_CWD: cwd,
         DB_PATH: ":memory:",
-        ...(hours === undefined ? {} : { DELETE_AFTER_HOURS: hours }),
       },
     });
   } finally {
@@ -80,6 +89,6 @@ for (const hours of ["-1", "invalid", "Infinity"]) {
   test(`invalid DELETE_AFTER_HOURS=${hours} is rejected`, () => {
     const result = run(hours, `await import(${JSON.stringify(configUrl)});`);
     assert.equal(result.status, 1, result.stderr || String(result.error));
-    assert.match(result.stderr, /DELETE_AFTER_HOURS must be a finite non-negative number/);
+    assert.match(result.stderr, /Invalid config.json: DELETE_AFTER_HOURS/);
   });
 }

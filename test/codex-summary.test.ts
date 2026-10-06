@@ -243,12 +243,17 @@ test("an exact Codex setting tuple collapses to its preset name", () => {
 });
 
 test("Codex model picker exposes and selects configured presets", () => {
-  const preset = cfg.codexPresets[0]!;
-  const picker = codexModelPicker(preset.model, preset.effort, preset.serviceTier);
-
-  assert.equal(picker.group.initial, "preset:0");
-  assert.deepEqual(picker.selected(null), { kind: "preset", preset });
-  assert.ok(picker.group.options.some((option) => option.label === `🎛️ ${preset.name}`));
+  const original = cfg.codexPresets;
+  const preset = { name: "Test", model: "gpt-5.6-sol", effort: "high", serviceTier: "default" } as const;
+  cfg.codexPresets = [preset];
+  try {
+    const picker = codexModelPicker(preset.model, preset.effort, preset.serviceTier);
+    assert.equal(picker.group.initial, "preset:0");
+    assert.deepEqual(picker.selected(null), { kind: "preset", preset });
+    assert.ok(picker.group.options.some((option) => option.label === `🎛️ ${preset.name}`));
+  } finally {
+    cfg.codexPresets = original;
+  }
 });
 
 test("the no-preset Codex launch picker exposes standard and fast modes", () => {

@@ -2,9 +2,15 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
+import { cfg } from "../src/config/env.ts";
 import { normalizeOpenRouterModel } from "../src/config/openrouter-model.ts";
 import { openRouterModelPicker, parseOpenRouterPresets } from "../src/config/openrouter-presets.ts";
+
+const historyRoot = await mkdtemp(join(tmpdir(), "openrouter-history-"));
+cfg.openrouterHistoryPath = historyRoot;
+cfg.permission = "bypass";
+after(() => rm(historyRoot, { recursive: true, force: true }));
 
 test("OpenRouter model ids preserve slash and :free when copied from links", () => {
   assert.equal(normalizeOpenRouterModel("openrouter/free"), "openrouter/free");
@@ -37,14 +43,6 @@ test("OpenRouter presets keep optional request settings and short picker callbac
 });
 
 test("OpenRouter client retries 429 and never sends an empty-key request", async () => {
-  process.env.BOT_TOKEN ??= "test-token";
-  process.env.FORUM_CHAT_ID ??= "-100123";
-  process.env.ALLOWED_USER_ID ??= "1";
-  process.env.DEFAULT_CWD ??= process.cwd();
-  process.env.PERMISSION ??= "bypass";
-  process.env.OPENROUTER_API_KEY = "test-key";
-  const historyRoot = await mkdtemp(join(tmpdir(), "openrouter-history-"));
-  process.env.OPENROUTER_HISTORY_PATH = historyRoot;
   const { OpenRouterClient, openRouterUsage } = await import("../src/providers/openrouter/client.ts");
 
   let calls = 0;
@@ -155,7 +153,7 @@ test("OpenRouter agent loop persists tool messages and resumes the same history"
     // The id is exposed through the hook in the real TopicSession; find the one
     // persisted history file without relying on a private field here.
     const { readdir } = await import("node:fs/promises");
-    const files = await readdir(process.env.OPENROUTER_HISTORY_PATH!);
+    const files = await readdir(historyRoot);
     assert.equal(files.length, 1);
     const id = files[0]!.replace(/\.jsonl$/, "");
     const second = makeSession(id);
@@ -239,11 +237,6 @@ test("OpenRouter stop aborts the pending request and keeps prior usage", async (
 });
 
 test("OpenRouter executor performs file tools and shell through the shared tool surface", async () => {
-  process.env.BOT_TOKEN ??= "test-token";
-  process.env.FORUM_CHAT_ID ??= "-100123";
-  process.env.ALLOWED_USER_ID ??= "1";
-  process.env.DEFAULT_CWD ??= process.cwd();
-  process.env.PERMISSION = "bypass";
   const { executeOpenRouterTool } = await import("../src/providers/openrouter/tools.ts");
   const dir = await mkdtemp(join(tmpdir(), "openrouter-tools-"));
   const ctx = {

@@ -34,6 +34,7 @@ git clone https://github.com/Filo6699/ai-telegram-forum.git
 cd ai-telegram-forum
 npm install
 cp .env.example .env
+cp config.example.json config.json
 ```
 
 ### 2. Set up Telegram
@@ -55,25 +56,55 @@ cp .env.example .env
 
 General will be the launcher for new sessions. To use a separate launcher topic,
 create one, send a message there, and use its `message.message_thread_id` as
-`LAUNCHER_THREAD_ID`.
+`LAUNCHER_THREAD_ID` in `config.json`.
 
 ### 3. Configure and start
 
-Edit `.env` with your token, IDs, and an existing project directory:
+Edit `.env` with your credentials and local state paths:
 
 ```dotenv
 BOT_TOKEN=your-bot-token
 FORUM_CHAT_ID=-1001234567890
 ALLOWED_USER_ID=123456789
-LAUNCHER_THREAD_ID=General
-DEFAULT_CWD=/absolute/path/to/your/project
-PROJECTS={}
-PROVIDER=claude
+OPENROUTER_API_KEY=
+DB_PATH=./data/state.db
+PID_PATH=./data/bot.pid
 ```
 
-Set `PROVIDER` to `claude`, `codex`, or `openrouter`. For OpenRouter, also set
-`OPENROUTER_API_KEY` and optionally `OPENROUTER_MODEL`.
-Other settings are documented in [`.env.example`](./.env.example).
+All other bot settings live in `config.json`. Set an existing project directory
+and choose `claude`, `codex`, or `openrouter`:
+
+```json
+{
+  "LAUNCHER_THREAD_ID": "General",
+  "DEFAULT_CWD": "/absolute/path/to/your/project",
+  "PROJECTS": {},
+  "PROVIDER": "claude"
+}
+```
+
+For OpenRouter, set `OPENROUTER_API_KEY` in `.env` and optionally
+`OPENROUTER_MODEL` in `config.json`. See [`.env.example`](./.env.example) for
+local values and [`config.example.json`](./config.example.json) for portable
+settings. Omitted settings use built-in defaults; a missing config file uses
+those defaults too. Unknown keys and invalid values fail at startup.
+
+Both files are loaded from this checkout, including when adoption is invoked
+from another project. Both are git-ignored. Copy `config.json` to another machine
+to reuse your settings; adjust absolute project paths if its directory layout
+differs. JSON objects and arrays are native values, without dotenv quoting.
+
+For an existing installation that stores all settings in `.env`, migrate once
+**before** creating `config.json`:
+
+```bash
+npm run migrate-config -- --dry-run
+npm run migrate-config
+```
+
+Migration preserves your local values, moves the remaining settings to JSON,
+and refuses to overwrite an existing `config.json`. The old `MODEL` setting
+becomes `CLAUDE_MODEL`. Restart the bot after changing configuration.
 
 ```bash
 npm start
@@ -96,10 +127,13 @@ fix the failing login test
 /srv/app explain how authentication works
 ```
 
-The first uses `DEFAULT_CWD`. The second uses an alias from `PROJECTS` in `.env`:
+The first uses `DEFAULT_CWD`. The second uses an alias from `PROJECTS` in
+`config.json`:
 
-```dotenv
-PROJECTS={"myrepo":"/home/you/projects/myrepo"}
+```json
+{
+  "PROJECTS": {"myrepo": "/home/you/projects/myrepo"}
+}
 ```
 
 The third uses an absolute path. The new topic remembers the directory, so you
@@ -176,13 +210,32 @@ npm run telegramify -- --provider codex --session <session-id>
 
 ### Model presets
 
-Defaults and optional picker presets live in `.env`:
+Defaults and optional picker presets live in `config.json`:
 `CLAUDE_MODEL`, `CODEX_MODEL`, `CODEX_PRESETS`, `CODEX_DEFAULT_PRESET`,
 `OPENROUTER_MODEL`, and `OPENROUTER_PRESETS`.
 When starting a Codex or OpenRouter session, the configured Codex presets and
 OpenRouter presets appear in one picker. Choosing `Free` or `Deepseek` switches
-that new topic to OpenRouter automatically. See [`.env.example`](./.env.example)
-for examples. OpenRouter appears only when its API key is configured.
+that new topic to OpenRouter automatically. Add native JSON objects, for example:
+
+```json
+{
+  "CODEX_PRESETS": {
+    "Decent": {"model": "gpt-5.6-sol", "effort": "high"},
+    "Quick": {"model": "gpt-5.6-sol", "effort": "low", "fast": true}
+  },
+  "CODEX_DEFAULT_PRESET": "Decent",
+  "OPENROUTER_PRESETS": {
+    "Free": {"model": "openrouter/free"}
+  }
+}
+```
+
+Codex presets support `serviceTier` (`default` or `fast`) and `light` as an alias
+for `low` effort. Without presets, the picker shows separate model and effort
+grids. Optional `CODEX_EFFORT` sets the default effort before falling back to
+Codex's native configuration. OpenRouter presets also support `temperature`,
+`max_tokens`, `reasoning`, `provider`, and up to three `fallbacks` model IDs.
+OpenRouter appears only when its API key is configured in `.env`.
 
 ## Permissions and stored data
 
@@ -190,7 +243,7 @@ for examples. OpenRouter appears only when its API key is configured.
 `.env` private and run the bot under an OS account with access only to the
 projects it needs.
 
-`PERMISSION=auto` is the default:
+`"PERMISSION": "auto"` in `config.json` is the default:
 
 - Claude and OpenRouter auto-approve tools listed in `ALLOWED_TOOLS` and ask for
   other tools in Telegram. Recognized destructive shell commands also require
@@ -198,11 +251,11 @@ projects it needs.
 - Codex uses a `workspace-write` sandbox with network access. It cannot ask for
   interactive approval through Telegram; blocked operations return errors.
 
-`PERMISSION=bypass` removes these approval checks and gives Codex full filesystem
+`"PERMISSION": "bypass"` removes these approval checks and gives Codex full filesystem
 access. Even in `auto`, the default tool list allows file edits and shell commands.
 
-Idle topics are deleted after **7 days** by default (`DELETE_AFTER_HOURS=168`).
-Set `DELETE_AFTER_HOURS=0` in `.env` and restart the bot to disable automatic
+Idle topics are deleted after **7 days** by default (`"DELETE_AFTER_HOURS": 168`).
+Set `"DELETE_AFTER_HOURS": 0` in `config.json` and restart the bot to disable automatic
 topic deletion. When enabled, deletion removes
 the Telegram topic and its database entry, but keeps agent transcripts and
 attachments on disk. Claude and Codex sessions remain resumable from the terminal.

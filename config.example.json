@@ -1,0 +1,20 @@
+{
+  "LAUNCHER_THREAD_ID": "General",
+  "DEFAULT_CWD": ".",
+  "PROJECTS": {},
+  "PROVIDER": "claude",
+  "CLAUDE_MODEL": "claude-opus-5",
+  "CODEX_MODEL": "gpt-5.6-sol",
+  "OPENROUTER_MODEL": "openrouter/free",
+  "OPENROUTER_HISTORY_PATH": "./data/openrouter-sessions",
+  "OPENROUTER_MAX_STEPS": 24,
+  "OPENROUTER_TURN_TIMEOUT_MINUTES": 30,
+  "OPENROUTER_MAX_TOOL_OUTPUT": 20000,
+  "OPENROUTER_CONTEXT_WINDOW": 64000,
+  "PERMISSION": "auto",
+  "ALLOWED_TOOLS": ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
+  "PERMISSION_TIMEOUT_MINUTES": 10,
+  "SESSION_IDLE_MINUTES": 20,
+  "DELETE_AFTER_HOURS": 168,
+  "INBOX_PATH": "./data/inbox"
+}

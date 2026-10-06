@@ -31,7 +31,8 @@ cli/telegramify.ts → storage/db.ts + app/heartbeat.ts + Telegram API
 - `telegram/` owns Telegram interaction: parsing commands, choosing settings,
   approval buttons, collecting attachments, rendering messages and sending agent
   output. `limits.ts` formats common plan-limit data; it does not fetch it.
-- `config/` parses environment and settings and describes model/effort/preset
+- `config/` combines six local environment values with portable `config.json`
+  settings, validates them, and describes model/effort/preset
   choices. It does not start agent processes or write topic state.
 - `storage/` owns SQLite persistence. OpenRouter transcript persistence stays
   with its provider because it is part of that provider's session protocol.
