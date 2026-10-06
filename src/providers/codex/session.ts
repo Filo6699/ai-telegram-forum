@@ -4,15 +4,11 @@ import { CodexAppServerClient, type AppServerNotification } from "./app-server-c
 import { cfg } from "../../config/env.ts";
 import { recordCodexTurnTier } from "../../storage/db.ts";
 import { PENDING_TITLE_MARK } from "../../sessions/cwd.ts";
-import type { Model } from "../../config/model.ts";
 import { tgSendDelivered, type TgSendArgs } from "../../telegram/tg-tools.ts";
 import type { AgentInput, AgentSession, AgentSessionOptions, AgentSettings, AgentSideResult, AgentTurnResult } from "../../sessions/types.ts";
 import { zeroUsage, type Usage } from "../../sessions/usage.ts";
 import { clearPermissions } from "../../telegram/permission.ts";
-
-// Keep the app-server adapter compatible with the earlier token-only helper as
-// well as the newer model-priced helper while that accounting work is local.
-const codexUsage = readCodexUsage as unknown as (usage: any, model?: Model) => Usage;
+import { CodexResponseUsage, type CodexTokenUsage } from "./token-usage.ts";
 
 export class CodexAgentSession implements AgentSession {
   private pending: CodexInput[] = [];
@@ -197,6 +193,7 @@ export class CodexAgentSession implements AgentSession {
     let answer = "";
     let hasFinalAnswer = false;
     let usage = zeroUsage();
+    const tokens = new CodexResponseUsage();
     let failure: string | null = null;
     let sent = 0;
     const deliveries: Promise<void>[] = [];
@@ -259,7 +256,15 @@ export class CodexAgentSession implements AgentSession {
         }
       } else if (event.method === "thread/tokenUsage/updated") {
         const last = params.tokenUsage?.last;
-        if (last) usage = appServerUsage(last, this.settings.model);
+        if (last && tokens.add(
+          appServerTokens(last),
+          params.tokenUsage.total ? appServerTokens(params.tokenUsage.total) : undefined,
+        )) {
+          usage = readCodexUsage({
+            input_tokens: tokens.inputTokens,
+            output_tokens: tokens.outputTokens,
+          });
+        }
       } else if (event.method === "error" && !params.willRetry) {
         failure ??= `⚠️ ${params.error?.message ?? "Codex turn failed"}`;
       } else if (event.method === "turn/completed") {
@@ -313,17 +318,13 @@ const appServerInput = (input: CodexInput): any[] => [
   ...input.images.map((image) => ({ type: "localImage", path: image.path })),
 ];
 
-function appServerUsage(raw: any, model: Model): Usage {
-  return codexUsage(
-    {
-      input_tokens: raw.inputTokens ?? 0,
-      cached_input_tokens: raw.cachedInputTokens ?? 0,
-      cache_write_input_tokens: raw.cacheWriteInputTokens ?? 0,
-      output_tokens: raw.outputTokens ?? 0,
-      reasoning_output_tokens: raw.reasoningOutputTokens ?? 0,
-    },
-    model,
-  );
+function appServerTokens(raw: any): CodexTokenUsage {
+  return {
+    input_tokens: raw.inputTokens ?? 0,
+    cached_input_tokens: raw.cachedInputTokens ?? 0,
+    output_tokens: raw.outputTokens ?? 0,
+    total_tokens: raw.totalTokens,
+  };
 }
 
 function appServerToolName(item: any): string | null {

@@ -8,6 +8,8 @@ import {
   type CodexTokenBreakdown,
 } from "./quota.ts";
 import type { ServiceTier } from "../../config/codex-presets.ts";
+import { CodexResponseUsage } from "./token-usage.ts";
+import { codexRolloutIndex } from "./rollout-index.ts";
 
 const BASELINE_TOKENS = 12_000;
 
@@ -23,6 +25,7 @@ interface TokenUsage extends CodexTokenBreakdown {
 
 interface RolloutLine {
   type?: string;
+  timestamp?: string;
   payload?: {
     type?: string;
     model?: string | null;
@@ -49,6 +52,8 @@ export interface ParsedCodexRollout {
 
 export interface CodexSessionUsage {
   totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
   contextUsedPercent: number | null;
   estimatedWeeklyPercent: number | null;
 }
@@ -69,28 +74,37 @@ const nativeServiceTier = (value: string | null | undefined): Exclude<ServiceTie
 class SessionUsageParser {
   private model: string | null = null;
   private serviceTier: ServiceTier;
-  private totalTokens = 0;
+  private tokens = new CodexResponseUsage();
   private estimatedCredits = 0;
   private pricedResponses = 0;
   private contextUsedPercent: number | null = null;
   private responses = 0;
   private children = new Map<string, ServiceTier>();
   private untrackedTurns = new Set<string>();
+  private startedAt: string | null = null;
 
   constructor(private options: ParseOptions = {}) {
     this.serviceTier = options.fallbackTier ?? null;
   }
 
   line(line: string): void {
+    const hasMetadata = line.includes('"session_meta"');
     const hasUsage = line.includes('"token_count"') || line.includes('"turn_context"');
     const hasChildren = line.includes('"CollabAgentToolCall"');
-    if (!hasUsage && !hasChildren) return;
+    if (!hasMetadata && !hasUsage && !hasChildren) return;
     let record: RolloutLine;
     try {
       record = JSON.parse(line) as RolloutLine;
     } catch {
       return;
     }
+    if (record.type === "session_meta") {
+      this.startedAt ??= record.timestamp ?? null;
+      return;
+    }
+    // Forked rollouts can contain copied parent records. Their timestamps
+    // precede the fork's own header; they did not consume tokens in this child.
+    if (this.startedAt && record.timestamp && record.timestamp < this.startedAt) return;
     if (record.payload?.item?.type === "CollabAgentToolCall") {
       for (const id of Array.isArray(record.payload.item.receiver_thread_ids)
         ? record.payload.item.receiver_thread_ids
@@ -118,14 +132,8 @@ class SessionUsageParser {
     const info = record.payload.info;
     const last = info?.last_token_usage;
     if (!last) return;
+    if (!this.tokens.add(last, info?.total_token_usage)) return;
     this.responses++;
-
-    const responseTokens = last.total_tokens;
-    if (Number.isFinite(responseTokens)) this.totalTokens += responseTokens!;
-    else {
-      this.totalTokens += Math.max(0, Number(last.input_tokens ?? 0));
-      this.totalTokens += Math.max(0, Number(last.output_tokens ?? 0));
-    }
 
     if (this.model) {
       const credits = estimateCodexCredits(last, this.model, this.serviceTier);
@@ -151,7 +159,9 @@ class SessionUsageParser {
   result(): CodexSessionUsage | null {
     if (!this.responses) return null;
     return {
-      totalTokens: this.totalTokens,
+      totalTokens: this.tokens.totalTokens,
+      inputTokens: this.tokens.inputTokens,
+      outputTokens: this.tokens.outputTokens,
       contextUsedPercent: this.contextUsedPercent,
       estimatedWeeklyPercent:
         this.pricedResponses === this.responses
@@ -210,6 +220,8 @@ export function mergeCodexSessionUsage(usages: CodexSessionUsage[]): CodexSessio
   const first = usages[0]!;
   return {
     totalTokens: usages.reduce((sum, usage) => sum + usage.totalTokens, 0),
+    inputTokens: usages.reduce((sum, usage) => sum + usage.inputTokens, 0),
+    outputTokens: usages.reduce((sum, usage) => sum + usage.outputTokens, 0),
     // Context occupancy belongs to the parent conversation, whose usage is
     // intentionally first in the list. Child contexts must not be added.
     contextUsedPercent: first.contextUsedPercent,
@@ -235,18 +247,25 @@ async function rolloutPath(sessionId: string): Promise<string | null> {
 export async function fetchCodexSessionUsage(
   sessionId: string,
   fallbackTier: ServiceTier = null,
+  visited = new Set<string>(),
 ): Promise<CodexSessionUsage | null> {
+  if (visited.has(sessionId)) return null;
   const rootPath = await rolloutPath(sessionId);
   if (!rootPath) return null;
+  let index: Awaited<ReturnType<typeof codexRolloutIndex>> = null;
+  try {
+    index = await codexRolloutIndex(rootPath);
+    for (const [id, path] of index?.paths ?? []) rolloutPaths.set(id, path);
+  } catch (err) {
+    console.warn("[usage] indexing Codex child rollouts failed:", String(err));
+  }
 
   const pending = [{ sessionId, path: rootPath, fallbackTier }];
-  const visited = new Set<string>();
   const usages: CodexSessionUsage[] = [];
 
   while (pending.length) {
     const current = pending.shift()!;
     if (visited.has(current.sessionId)) continue;
-    visited.add(current.sessionId);
 
     let parsed: ParsedCodexRollout;
     try {
@@ -258,6 +277,7 @@ export async function fetchCodexSessionUsage(
       console.warn(`[usage] reading Codex rollout ${current.sessionId} failed:`, String(err));
       continue;
     }
+    visited.add(current.sessionId);
     // Freeze a best-effort tier for old turns. Otherwise switching presets
     // would reprice the entire prior session on every status refresh.
     for (const turnId of parsed.untrackedTurnIds) {
@@ -265,7 +285,8 @@ export async function fetchCodexSessionUsage(
     }
     if (parsed.usage) usages.push(parsed.usage);
 
-    for (const childId of parsed.childThreadIds) {
+    const children = new Set([...parsed.childThreadIds, ...(index?.children.get(current.sessionId) ?? [])]);
+    for (const childId of children) {
       if (visited.has(childId)) continue;
       try {
         const childPath = await rolloutPath(childId);

@@ -5,6 +5,7 @@ import { setActivity } from "../storage/db.ts";
 import { cfg } from "../config/env.ts";
 import { botCommands, parseCommand, type ParsedCommand } from "../telegram/commands.ts";
 import { fetchCodexPlanLimits } from "../providers/codex/limits.ts";
+import { fetchCodexSessionUsage, type CodexSessionUsage } from "../providers/codex/session-usage.ts";
 import {
   classify,
   fetchDocument,
@@ -77,6 +78,7 @@ import {
   setModel,
   setStatus,
   totals,
+  codexUsageTopics,
   type Topic,
 } from "../storage/db.ts";
 
@@ -98,7 +100,7 @@ const isLauncher = (threadId: number | undefined) =>
 
 const fmt = fmtTokens;
 
-function topicUsageText(t: Topic): string {
+function topicUsageText(t: Topic, native?: CodexSessionUsage | null): string {
   return (
     `📊 *${t.title}*\n` +
     `turns: ${t.turns}\n` +
@@ -108,13 +110,16 @@ function topicUsageText(t: Topic): string {
       ? `preset: ${t.openrouter_settings?.preset ?? "custom/default"}\n`
       : `effort: ${effortLabel(t.effort, defaultEffort(t.cwd, t.provider))}\n`) +
     (t.provider === "codex" ? `mode: ${serviceTierLabel(t.service_tier)}\n` : "") +
-    `tokens: ${fmt(t.in_tokens)} in / ${fmt(t.out_tokens)} out\n` +
-    `cost: ${t.cost_known ? `$${t.cost_usd.toFixed(4)}` : "unavailable"}`
+    `tokens: ${fmt(native?.inputTokens ?? t.in_tokens)} in / ${fmt(native?.outputTokens ?? t.out_tokens)} out\n` +
+    `cost: ${t.provider !== "codex" && t.cost_known ? `$${t.cost_usd.toFixed(4)}` : "unavailable"}` +
+    (t.provider === "codex"
+      ? native ? "\n_tokens from persisted Codex logs + agents; /btw excluded_"
+        : "\n_recorded tokens; older Codex turns may be incomplete_"
+      : "")
   );
 }
 
-function totalsText(): string {
-  const s = totals();
+function totalsText(s = totals(), nativeCodex = false): string {
   const provider = nextProvider ?? cfg.provider;
   const preset =
     provider === "codex" && cfg.codexPresets.length
@@ -140,7 +145,8 @@ function totalsText(): string {
       : `next session effort: ${effortLabel(preset?.effort ?? nextEffort ?? null, defaultEffort(cfg.defaultCwd, provider))}\n`) +
     (preset ? `next session mode: ${serviceTierLabel(preset.serviceTier)}\n` : "") +
     `tokens: ${fmt(s.in_tokens)} in / ${fmt(s.out_tokens)} out\n` +
-    `cost: ${s.cost_known ? `$${s.cost_usd.toFixed(4)}` : "unavailable"}`
+    `cost: ${s.cost_known ? `$${s.cost_usd.toFixed(4)}` : "unavailable"}` +
+    (nativeCodex ? "\n_Codex tokens from available persisted logs; /btw excluded_" : "")
   );
 }
 
@@ -611,10 +617,10 @@ async function handleCommand(
 
   // In a task topic -> that topic's usage; in the launcher -> grand total.
   const t = thread !== undefined ? getTopic(thread) : undefined;
-  const local = t ? topicUsageText(t) : totalsText();
+  let local = t ? topicUsageText(t) : totalsText();
 
   const provider = t?.provider ?? nextProvider ?? cfg.provider;
-  if (provider === "openrouter") {
+  if (provider === "openrouter" && t) {
     await replySilently(ctx, local, { message_thread_id: thread, parse_mode: "Markdown" });
     return;
   }
@@ -626,6 +632,39 @@ async function handleCommand(
   });
 
   let plan: string;
+  try {
+    if (t?.provider === "codex" && t.session_id) {
+      local = topicUsageText(t, await fetchCodexSessionUsage(t.session_id, t.service_tier));
+    } else if (!t) {
+      const sum = totals();
+      let verified = false;
+      const counted = new Set<string>();
+      for (const topic of codexUsageTopics()) {
+        try {
+          const alreadyCounted = counted.has(topic.session_id!);
+          const native = await fetchCodexSessionUsage(topic.session_id!, topic.service_tier, counted);
+          if (!native && !alreadyCounted) continue;
+          sum.in_tokens += (native?.inputTokens ?? 0) - topic.in_tokens;
+          sum.out_tokens += (native?.outputTokens ?? 0) - topic.out_tokens;
+          sum.cost_known = 0;
+          verified = true;
+        } catch (err) {
+          console.warn(`[usage] native Codex tally for ${topic.session_id} failed:`, String(err));
+        }
+      }
+      local = totalsText(sum, verified);
+    }
+  } catch (err) {
+    console.warn("[usage] native Codex token tally failed:", String(err));
+  }
+  if (provider === "openrouter") {
+    try {
+      await ctx.api.editMessageText(ctx.chat.id, sent.message_id, local, { parse_mode: "Markdown" });
+    } catch (err) {
+      console.warn("[usage] editing the reply failed:", String(err));
+    }
+    return;
+  }
   try {
     const limits =
       provider === "codex" ? await fetchCodexPlanLimits() : await fetchPlanLimits(anyLiveQuery());

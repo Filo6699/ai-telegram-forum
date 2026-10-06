@@ -166,7 +166,15 @@ remain commands.
 - `/btw <question>` — ask Claude or Codex a side question without interrupting
   the main task or adding the exchange to its history.
 - `/usage` — show usage and available plan limits. In the launcher, show totals
-  across topics. Codex allowance estimates in turn summaries are approximate.
+  across retained topics. Codex token counts are read from native session logs,
+  including spawned agents; adopted sessions include their terminal history.
+  Ephemeral Codex `/btw` forks have no persisted rollout and are excluded from
+  the native log totals.
+  Plan limits come directly from the account and include usage outside Telegram.
+  The `≈` allowance percentages in Codex turn summaries use an estimated weekly
+  capacity of 8,500 credits, not an official conversion for every plan. Credit
+  rates alone do not determine included subscription usage. The summary shows
+  this turn, then the full session history, which can span several reset windows.
 - `/resume` — get the command to continue a Claude or Codex session in a terminal.
 - `/id` — show the session ID.
 - `/progress off|brief|detailed` — set progress messages. In the launcher,

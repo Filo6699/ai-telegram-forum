@@ -4,7 +4,8 @@ import type { ServiceTier } from "../../config/codex-presets.ts";
  * Recalibrated from local Pro windows through 2026-09-11, including Astra.
  * Recent windows imply ~8,517–8,579 credits; rounded to 8,500. OpenAI does
  * not publish the included weekly capacity, so unlike the per-model rates this
- * denominator is deliberately an estimate.
+ * denominator is deliberately an estimate. Credit rates alone do not determine
+ * included subscription usage; it must not be presented as an account reading.
  */
 const WEEKLY_CREDITS_ESTIMATE = 8_500;
 

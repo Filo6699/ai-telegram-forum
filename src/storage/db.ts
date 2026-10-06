@@ -295,6 +295,12 @@ export function totals(): Totals {
   return stmts.totals.get() as unknown as Totals;
 }
 
+/** Roots whose native rollouts can repair older Codex token tallies on read. */
+export function codexUsageTopics(): Topic[] {
+  return (db.prepare("SELECT * FROM topics WHERE provider = 'codex' AND session_id IS NOT NULL")
+    .all() as any[]).map(decodeTopic);
+}
+
 /** Topics idle past `deleteAfterMs`, whatever their status. */
 export function listStale(deleteAfterMs: number): Topic[] {
   return (stmts.stale.all(Date.now() - deleteAfterMs) as any[]).map(decodeTopic);

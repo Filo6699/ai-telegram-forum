@@ -21,9 +21,9 @@ export function formatCodexWeeklyPart(
   turnBaseline: number | null = null,
 ): string {
   const session = formatCodexWeeklyPercent(total);
-  if (turnBaseline === null) return `🧠 ${session}`;
+  if (turnBaseline === null) return `🧠 ≈${session}`;
   const turn = formatCodexWeeklyPercent(Math.max(0, total - turnBaseline));
-  return `🧠 ${turn} | ${session}`;
+  return `🧠 ≈${turn} | ≈${session}`;
 }
 
 /** Compact estimated weekly spend for one persisted Codex session. */
