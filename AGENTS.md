@@ -42,7 +42,9 @@ npm run codexify -- --dry-run    # backwards-compatible Codex alias
   requested change seems unrelated, ask the user how it serves the bridge
   before making it; do not add off-topic functionality on an assumption.
 - **The agent speaks for itself.** Everything the user reads comes from the
-  agent calling `mcp__tg__send`; the transcript is never relayed. Don't add
+  agent calling `mcp__tg__send` or a native user-input tool; the transcript is
+  never relayed. Native questions are delivered immediately and bound to the
+  Telegram message so a reply answers that exact question. Don't add
   unsolicited activity posts — tool calls belong in the live status line,
   which is one bot-owned message per turn, edited in place. The explicit
   `/toolcalls` setting enables individual tool-call messages; `/progress`
@@ -57,9 +59,12 @@ npm run codexify -- --dry-run    # backwards-compatible Codex alias
   next step — never interrupt a running turn to hand it over, and never add a
   queue in front of it. Anything that shuts a topic down (sweep, idle timeout)
   must go through `endSession`, or the child process is orphaned.
-  Codex's SDK has no steering API: input received mid-turn is consumed as the
-  next turn, without interrupting the running one. Its subprocess is per-turn,
-  but the same persisted thread id and in-memory topic object continue.
+  Codex queues ordinary mid-turn input for its next turn. Replies to native
+  async questions use app-server `turn/steer` with `expectedTurnId`; structured
+  input requests receive a response on their original server request id.
+  The topic owns one app-server connection shared by main and side turns.
+  Async question bindings survive turns and restarts; pending server requests
+  must settle on answer, timeout, cancellation, or connection shutdown.
 - **Callback queries are inbound too.** They're the one path that doesn't go
   through the message handler's gate, so every handler must check
   `ALLOWED_USER_ID` itself. A permission prompt must always settle — button,

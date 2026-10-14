@@ -11,6 +11,21 @@ export interface AppServerNotification {
 }
 
 type NotificationListener = (message: AppServerNotification) => void;
+export type RequestId = string | number;
+
+export class AppServerError extends Error {
+  constructor(message: string, readonly code: number, readonly data?: unknown) {
+    super(message);
+  }
+}
+
+export interface AppServerRequest extends AppServerNotification {
+  id: RequestId;
+  /** Bound to the originating process, and settled at most once. */
+  respond(result: unknown): Promise<void>;
+}
+
+type RequestListener = (request: AppServerRequest) => boolean;
 
 /** A topic-owned Codex app-server connection, shared by its main and side turns. */
 export class CodexAppServerClient {
@@ -21,6 +36,8 @@ export class CodexAppServerClient {
     { resolve(value: any): void; reject(error: Error): void }
   >();
   private listeners = new Set<NotificationListener>();
+  private requestListeners = new Set<RequestListener>();
+  private incoming = new Map<RequestId, object>();
   private starting: Promise<void> | null = null;
   private stderr = "";
 
@@ -45,6 +62,11 @@ export class CodexAppServerClient {
     return () => this.listeners.delete(listener);
   }
 
+  onRequest(listener: RequestListener): () => void {
+    this.requestListeners.add(listener);
+    return () => this.requestListeners.delete(listener);
+  }
+
   close(): void {
     const child = this.child;
     this.child = null;
@@ -52,10 +74,12 @@ export class CodexAppServerClient {
     const error = new Error("Codex app-server closed");
     for (const waiter of this.pending.values()) waiter.reject(error);
     this.pending.clear();
+    this.incoming.clear();
     for (const listener of this.listeners) {
       listener({ method: "client/closed", params: { error } });
     }
     this.listeners.clear();
+    this.requestListeners.clear();
   }
 
   private async open(): Promise<void> {
@@ -78,7 +102,9 @@ export class CodexAppServerClient {
         ),
       );
     });
-    lines.on("line", (line) => this.receive(line));
+    lines.on("line", (line) => {
+      if (this.child === child) this.receive(line);
+    });
 
     const timeout = setTimeout(
       () => this.fail(new Error(`Codex app-server initialization timed out`)),
@@ -130,9 +156,11 @@ export class CodexAppServerClient {
       this.pending.delete(message.id);
       if (message.error) {
         waiter.reject(
-          new Error(
+          new AppServerError(
             `${message.error.message ?? "Codex app-server request failed"}` +
               (message.error.data ? `: ${JSON.stringify(message.error.data)}` : ""),
+            message.error.code,
+            message.error.data,
           ),
         );
       } else {
@@ -141,19 +169,39 @@ export class CodexAppServerClient {
       return;
     }
 
-    // The bridge runs Codex with approvalPolicy=never. Unexpected interactive
-    // requests must still settle, otherwise one malformed turn waits forever.
-    if (typeof message.id === "number" && message.method) {
-      this.child?.stdin.write(
-        `${JSON.stringify({
-          id: message.id,
-          error: { code: -32601, message: "Interactive requests are unavailable in Telegram" },
-        })}\n`,
-      );
+    if ((typeof message.id === "number" || typeof message.id === "string") && message.method) {
+      const child = this.child;
+      const token = {};
+      this.incoming.set(message.id, token);
+      const respond = (payload: object): Promise<void> => {
+        if (!child || this.child !== child || this.incoming.get(message.id) !== token) {
+          return Promise.reject(new Error("Codex server request is no longer open"));
+        }
+        this.incoming.delete(message.id);
+        return new Promise((resolve, reject) => {
+          child.stdin.write(`${JSON.stringify({ id: message.id, ...payload })}\n`, (error) => {
+            if (error) reject(error);
+            else resolve();
+          });
+        });
+      };
+      const request: AppServerRequest = { ...message, respond: (result) => respond({ result }) };
+      for (const listener of this.requestListeners) {
+        try {
+          if (listener(request)) return;
+        } catch (err) {
+          console.warn("[codex] server request handler failed:", String(err));
+        }
+      }
+      // Questions are interactive input, independent of approvalPolicy=never.
+      // Unsupported approvals and requests must still settle.
+      void respond({ error: { code: -32601, message: "Unsupported Codex server request" } })
+        .catch((err) => console.warn("[codex] rejecting server request failed:", String(err)));
       return;
     }
 
     if (typeof message.method === "string") {
+      if (message.method === "serverRequest/resolved") this.incoming.delete(message.params?.requestId);
       for (const listener of this.listeners) listener(message);
     }
   }
@@ -165,6 +213,7 @@ export class CodexAppServerClient {
     child?.kill();
     for (const waiter of this.pending.values()) waiter.reject(error);
     this.pending.clear();
+    this.incoming.clear();
     for (const listener of this.listeners) {
       listener({ method: "client/closed", params: { error } });
     }

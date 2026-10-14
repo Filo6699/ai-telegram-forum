@@ -1,6 +1,8 @@
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { codexAppThreadParams, codexSideBoundaryItem, codexSideForkParams, readCodexUsage, type CodexInput } from "./options.ts";
-import { CodexAppServerClient, type AppServerNotification } from "./app-server-client.ts";
+import { AppServerError, CodexAppServerClient, type AppServerNotification } from "./app-server-client.ts";
+import { CodexQuestions } from "./questions.ts";
+import { TelegramQuestions } from "../../telegram/questions.ts";
 import { cfg } from "../../config/env.ts";
 import { recordCodexTurnTier } from "../../storage/db.ts";
 import { PENDING_TITLE_MARK } from "../../sessions/cwd.ts";
@@ -12,7 +14,7 @@ import { CodexResponseUsage, type CodexTokenUsage } from "./token-usage.ts";
 
 export class CodexAgentSession implements AgentSession {
   private pending: CodexInput[] = [];
-  private server = new CodexAppServerClient();
+  private questions: CodexQuestions;
   private parentId: string | null = null;
   private opening: Promise<string> | null = null;
   private activeTurnId: string | null = null;
@@ -24,7 +26,7 @@ export class CodexAgentSession implements AgentSession {
   private failure: string | null = null;
   private settings: AgentSettings;
 
-  constructor(private opts: AgentSessionOptions) {
+  constructor(private opts: AgentSessionOptions, private server = new CodexAppServerClient()) {
     this.settings = {
       sessionId: opts.sessionId,
       effort: opts.effort,
@@ -32,6 +34,11 @@ export class CodexAgentSession implements AgentSession {
       serviceTier: opts.serviceTier,
       openrouter: opts.openrouter,
     };
+    this.questions = new CodexQuestions(
+      new TelegramQuestions(opts.bot.api, cfg.chatId, opts.threadId),
+      cfg.permissionTimeoutMs,
+      (input) => this.deliverAnswer(input),
+    );
   }
 
   get controlQuery(): Query | null {
@@ -41,6 +48,28 @@ export class CodexAgentSession implements AgentSession {
   async send(input: AgentInput): Promise<void> {
     this.pending.push(input);
     if (!this.running) void this.run();
+  }
+
+  async answerQuestion(messageId: number, input: AgentInput): Promise<boolean> {
+    return this.questions.answer(messageId, this.settings.sessionId, input);
+  }
+
+  private async deliverAnswer(input: AgentInput): Promise<void> {
+    const threadId = this.parentId;
+    const turnId = this.activeTurnId;
+    if (threadId && turnId) {
+      try {
+        await this.server.request("turn/steer", {
+          threadId, expectedTurnId: turnId, input: appServerInput(input),
+        });
+        return;
+      } catch (err) {
+        // Retry as queued input only for an explicit turn-transition rejection.
+        // A broken transport may have accepted the input: do not duplicate it.
+        if (!(err instanceof AppServerError) || !/no active turn|turn.*(mismatch|not.*active)|expected.*turn/i.test(err.message)) throw err;
+      }
+    }
+    await this.send(input);
   }
 
   async btw(input: AgentInput, onTool: (name: string) => void): Promise<AgentSideResult> {
@@ -93,6 +122,7 @@ export class CodexAgentSession implements AgentSession {
 
   close(): void {
     this.closed = true;
+    this.questions.close();
     this.server.close();
   }
 
@@ -192,6 +222,7 @@ export class CodexAgentSession implements AgentSession {
     let turnId: string | null = null;
     let answer = "";
     let hasFinalAnswer = false;
+    let turnCompleted = false;
     let usage = zeroUsage();
     const tokens = new CodexResponseUsage();
     let failure: string | null = null;
@@ -209,6 +240,7 @@ export class CodexAgentSession implements AgentSession {
       params?.threadId === threadId && (!turnId || !params.turnId || params.turnId === turnId);
     const onNotification = (event: AppServerNotification) => {
       if (event.method === "client/closed") {
+        this.questions.close();
         this.parentId = null;
         this.activeTurnId = null;
         reject(event.params.error);
@@ -217,7 +249,9 @@ export class CodexAgentSession implements AgentSession {
       const params = event.params;
       if (!belongs(params)) return;
 
-      if (event.method === "turn/started") {
+      if (event.method === "serverRequest/resolved") {
+        this.questions.resolved(params.requestId);
+      } else if (event.method === "turn/started") {
         turnId ??= params.turn.id;
         if (threadId === this.parentId) this.activeTurnId = turnId;
       } else if (event.method === "item/started") {
@@ -227,7 +261,16 @@ export class CodexAgentSession implements AgentSession {
         }));
       } else if (event.method === "item/completed") {
         const item = params.item;
-        if (item.type === "agentMessage" && item.text?.trim()) {
+        if (item.type === "agentMessage" && item.delivery === "async" && item.questions?.length) {
+          // Async questions use final_answer as their phase while the turn keeps
+          // working. They must never enter the buffered final-answer fallback.
+          if (options.deliverTelegram) deliveries.push(
+            this.questions.publishAsync(threadId, params.turnId ?? turnId!, item).catch((err) => {
+              failure ??= `⚠️ Couldn't deliver Codex question: ${String(err)}`;
+              console.warn("[codex] async question delivery failed:", String(err));
+            }),
+          );
+        } else if (item.type === "agentMessage" && item.text?.trim()) {
           if (item.phase === "final_answer") {
             answer = item.text;
             hasFinalAnswer = true;
@@ -268,6 +311,9 @@ export class CodexAgentSession implements AgentSession {
       } else if (event.method === "error" && !params.willRetry) {
         failure ??= `⚠️ ${params.error?.message ?? "Codex turn failed"}`;
       } else if (event.method === "turn/completed") {
+        turnCompleted = true;
+        if (threadId === this.parentId) this.activeTurnId = null;
+        this.questions.cancelTurn(threadId, params.turn.id);
         const status = params.turn.status;
         void Promise.all(deliveries).then(() => {
           settle({
@@ -284,6 +330,14 @@ export class CodexAgentSession implements AgentSession {
       }
     };
     const off = this.server.onNotification(onNotification);
+    const offRequest = this.server.onRequest((request) => {
+      if (request.method !== "item/tool/requestUserInput" || !belongs(request.params)) return false;
+      if (options.deliverTelegram) this.questions.request(request);
+      else void request.respond({ answers: {} }).catch((err) => {
+        console.warn("[codex] closing side question failed:", String(err));
+      });
+      return true;
+    });
     try {
       const started = await this.server.request<{ turn: { id: string } }>("turn/start", {
         threadId,
@@ -300,10 +354,12 @@ export class CodexAgentSession implements AgentSession {
           console.warn(`[codex:${this.opts.threadId}] recording turn tier failed:`, String(err));
         }
       }
-      if (threadId === this.parentId) this.activeTurnId = turnId;
+      if (!turnCompleted && threadId === this.parentId) this.activeTurnId = turnId;
       return await completed;
     } finally {
       off();
+      offRequest();
+      if (turnId) this.questions.cancelTurn(threadId, turnId);
       if (threadId === this.parentId) this.activeTurnId = null;
     }
   }

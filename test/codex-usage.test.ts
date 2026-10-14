@@ -81,10 +81,11 @@ test("native headers discover spawned children in active and archived logs, excl
 });
 
 test("app-server turns aggregate all responses and isolate other threads and turns", async () => {
-  const session = new CodexAgentSession({ model: "gpt-6.1-sol" } as any) as any;
+  const session = new CodexAgentSession({ model: "gpt-6.1-sol", bot: { api: {} } } as any) as any;
   let notify: (event: any) => void;
   session.server = {
     onNotification(listener: typeof notify) { notify = listener; return () => {}; },
+    onRequest() { return () => {}; },
     async request() {
       const last = { inputTokens: 100, cachedInputTokens: 80, outputTokens: 10, totalTokens: 110 };
       notify({ method: "turn/started", params: { threadId: "parent", turn: { id: "turn" } } });

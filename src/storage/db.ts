@@ -71,6 +71,22 @@ db.exec(`
     service_tier TEXT NOT NULL CHECK (service_tier IN ('default', 'fast')),
     PRIMARY KEY (session_id, turn_id)
   );
+  CREATE TABLE IF NOT EXISTS question_prompts (
+    chat_id INTEGER NOT NULL,
+    thread_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    question_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('async', 'rpc')),
+    question TEXT NOT NULL,
+    display_text TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'open',
+    PRIMARY KEY (chat_id, thread_id, message_id)
+  );
+  CREATE INDEX IF NOT EXISTS question_prompts_item
+    ON question_prompts (chat_id, thread_id, session_id, turn_id, item_id);
 `);
 
 // Migrate older DBs that predate the usage columns.
@@ -275,7 +291,49 @@ export function setTitle(threadId: number, title: string): void {
 }
 
 export function deleteTopic(threadId: number): void {
+  db.prepare("DELETE FROM question_prompts WHERE thread_id = ?").run(threadId);
   stmts.del.run(threadId);
+}
+
+/** Telegram bindings only; native provider transcripts remain untouched. */
+export interface QuestionPrompt {
+  chat_id: number;
+  thread_id: number;
+  message_id: number;
+  session_id: string;
+  turn_id: string;
+  item_id: string;
+  question_id: string;
+  kind: "async" | "rpc";
+  question: string;
+  display_text: string;
+  state: "open" | "answered" | "closed";
+}
+
+export function saveQuestionPrompt(p: QuestionPrompt): void {
+  db.prepare(`INSERT INTO question_prompts
+    (chat_id, thread_id, message_id, session_id, turn_id, item_id, question_id, kind, question, display_text, state)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    p.chat_id, p.thread_id, p.message_id, p.session_id, p.turn_id,
+    p.item_id, p.question_id, p.kind, p.question, p.display_text, p.state,
+  );
+}
+
+export function getQuestionPrompt(chatId: number, threadId: number, messageId: number): QuestionPrompt | undefined {
+  return db.prepare("SELECT * FROM question_prompts WHERE chat_id = ? AND thread_id = ? AND message_id = ?")
+    .get(chatId, threadId, messageId) as QuestionPrompt | undefined;
+}
+
+export function itemQuestionPrompts(chatId: number, threadId: number, sessionId: string, turnId: string, itemId: string): QuestionPrompt[] {
+  return db.prepare(`SELECT * FROM question_prompts
+    WHERE chat_id = ? AND thread_id = ? AND session_id = ? AND turn_id = ? AND item_id = ?`)
+    .all(chatId, threadId, sessionId, turnId, itemId) as unknown as QuestionPrompt[];
+}
+
+export function setQuestionPromptState(p: QuestionPrompt, state: QuestionPrompt["state"]): void {
+  db.prepare(`UPDATE question_prompts SET state = ?
+    WHERE chat_id = ? AND thread_id = ? AND session_id = ? AND turn_id = ? AND item_id = ? AND question_id = ?`)
+    .run(state, p.chat_id, p.thread_id, p.session_id, p.turn_id, p.item_id, p.question_id);
 }
 
 export function addUsage(threadId: number, u: Usage): void {

@@ -12,6 +12,7 @@ import type { Usage } from "./usage.ts";
 export interface AgentInput {
   text: string;
   images: ImagePart[];
+  replyTo?: { messageId: number; text: string };
 }
 
 export interface AgentSettings {
@@ -54,6 +55,8 @@ export interface AgentSessionHooks {
 export interface AgentSession {
   readonly controlQuery: Query | null;
   send(input: AgentInput): Promise<void>;
+  /** Consume a reply to a native question before adding ordinary prompt instructions. */
+  answerQuestion?(messageId: number, input: AgentInput): Promise<boolean>;
   btw(input: AgentInput, onTool: (name: string) => void): Promise<AgentSideResult>;
   interrupt(): Promise<boolean>;
   applySettings(settings: AgentSettings): Promise<void>;

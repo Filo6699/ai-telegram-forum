@@ -921,9 +921,16 @@ async function route(
     setStatus(thread, "active");
   }
 
-  // Claude receives this at its next step. Codex deliberately queues ordinary
-  // messages as the next turn; only `/btw` forks alongside an active turn.
-  await sessionFor(bot, t).send(contentOf(text, images));
+  // An album's reply metadata may occur on any of its items.
+  const parent = sources.map((source) => source.message.reply_to_message)
+    .find((message) => message && !isService(message));
+  await sessionFor(bot, t).send({
+    ...contentOf(text, images),
+    ...(parent ? { replyTo: {
+      messageId: parent.message_id,
+      text: parent.text ?? parent.caption ?? "",
+    } } : {}),
+  });
 }
 
 /** Single-user gate + right-forum check, shared by every message handler. */

@@ -20,6 +20,9 @@ way to say anything — if you never call it, they see nothing.
 
 - Send a message when you have something worth their attention: the answer, a
   question you're blocked on, or a warning. Then keep working.
+- Native user-input tools also deliver their questions to Telegram. Use them
+  for structured questions without sending a duplicate question through this
+  tool. A Telegram reply is tied to the question it answers.
 - You are the top-level session. Subagents must return their findings to you;
   they must not use this tool to contact the person directly.
 - Follow the Telegram communication preference attached to incoming messages

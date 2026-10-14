@@ -33,6 +33,7 @@ import { clearPermissions, denyPending } from "../telegram/permission.ts";
 import { TopicRenderer } from "../telegram/render.ts";
 import { TurnStatus } from "../telegram/status.ts";
 import { createTgChannel } from "../telegram/tg-tools.ts";
+import { replyContext } from "../telegram/reply.ts";
 
 export type { AgentInput } from "./types.ts";
 
@@ -40,8 +41,8 @@ export type { AgentInput } from "./types.ts";
  * One live Agent SDK session per topic.
  *
  * Claude is fed by an async iterator that stays open between turns, so a new
- * message reaches it at its next step. Codex's SDK has no steering API; those
- * messages are retained here and become its next native turn.
+ * message reaches it at its next step. Codex queues ordinary messages for its
+ * next turn; replies to native asynchronous questions can steer its active turn.
  *
  * The child process is kept only while the topic is warm — after
  * `SESSION_IDLE_MINUTES` of silence it is shut down, and the next message
@@ -226,8 +227,9 @@ export class TopicSession {
   async send(content: AgentInput): Promise<void> {
     touch(this.threadId);
     this.armIdleTimer();
+    if (content.replyTo && await this.agent.answerQuestion?.(content.replyTo.messageId, content)) return;
     const progress = getTopic(this.threadId)?.progress ?? "off";
-    await this.agent.send({ ...content, text: `${progressInstruction(progress)}\n\n${content.text}` });
+    await this.agent.send({ ...content, text: `${progressInstruction(progress)}\n\n${replyContext(content)}` });
   }
 
   /**

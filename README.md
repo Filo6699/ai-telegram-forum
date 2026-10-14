@@ -144,6 +144,22 @@ images; other attachments are saved locally and passed as file paths. The agent
 can send screenshots, documents, and other files back. A live status message
 shows tool activity while it works.
 
+Codex can ask questions while it works. Each native question appears as a
+separate message with any suggested answers. **Reply to that message** to answer
+that particular question; you can use your own wording. Replies to asynchronous
+questions reach the active Codex turn without interrupting it. If the turn has
+finished, the reply starts a new turn with the question included as context.
+Unanswered asynchronous questions remain answerable after a bot restart.
+
+Structured Codex input requests collect replies to all their questions before
+returning the result. They expire after `PERMISSION_TIMEOUT_MINUTES` (10 minutes
+by default), or close when the turn stops or the session ends. Missing answers
+are never filled with a suggested choice. A reply to an expired request is sent
+as conversation context, with a notice that the original request has closed.
+Native questions appear even with `/progress off`; they are separate from
+permission approvals. Replies to other messages include the quoted message as
+context. Ordinary messages continue to queue for Codex's next turn.
+
 ### Commands
 
 Commands accept typos and abbreviations: `/modee` opens `/model`, and `/usaeg`
@@ -257,7 +273,8 @@ projects it needs.
   other tools in Telegram. Recognized destructive shell commands also require
   approval. Unanswered prompts expire after 10 minutes by default.
 - Codex uses a `workspace-write` sandbox with network access. It cannot ask for
-  interactive approval through Telegram; blocked operations return errors.
+  interactive tool approval through Telegram; blocked operations return errors.
+  Native questions requesting user input are supported separately.
 
 `"PERMISSION": "bypass"` removes these approval checks and gives Codex full filesystem
 access. Even in `auto`, the default tool list allows file edits and shell commands.
