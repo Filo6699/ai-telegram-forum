@@ -24,6 +24,8 @@ export interface AgentSettings {
 }
 
 export interface AgentTurnResult {
+  /** The dedicated capacity recovery hook will deliver this failure. */
+  recoveringCapacity?: boolean;
   ok: boolean;
   usage: Usage;
   failure: string | null;
@@ -43,6 +45,8 @@ export interface AgentSessionHooks {
   text(value: string): void;
   tool(name: string, input?: unknown): void | Promise<void>;
   endTurn(result: AgentTurnResult): Promise<void>;
+  /** Wait for a capacity retry decision after a failed main turn. */
+  recoverCapacity?(failure: string, retries: number, canRetry: boolean): Promise<boolean>;
 }
 
 /**
@@ -59,6 +63,8 @@ export interface AgentSession {
   answerQuestion?(messageId: number, input: AgentInput): Promise<boolean>;
   btw(input: AgentInput, onTool: (name: string) => void): Promise<AgentSideResult>;
   interrupt(): Promise<boolean>;
+  /** Retry the last capacity failure if no newer user input has superseded it. */
+  retryCapacity?(): Promise<boolean>;
   applySettings(settings: AgentSettings): Promise<void>;
   suggestTitle(current: string): Promise<string | null>;
   close(): void;

@@ -1,4 +1,4 @@
-import { type Api, InputFile } from "grammy";
+import { type Api, InputFile, type InlineKeyboard } from "grammy";
 import telegramify from "telegramify-markdown";
 import { toTelegramHtml } from "./html.js";
 import type { MediaKind, OutgoingFile } from "./media.js";
@@ -65,6 +65,7 @@ type Mode = "MarkdownV2" | "HTML" | undefined;
 interface SendTextOptions {
   /** Suppress the push sound for immediate, bot-owned UI messages. */
   silent?: boolean;
+  replyMarkup?: InlineKeyboard;
 }
 
 interface TopicRendererOptions {
@@ -204,6 +205,7 @@ export class TopicRenderer {
                 }
               : {}),
             ...(opts.silent ? { disable_notification: true } : {}),
+            ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
             ...(mode ? { parse_mode: mode } : {}),
           });
           return sent.message_id;

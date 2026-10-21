@@ -57,6 +57,7 @@ import { fetchPlanLimits } from "../providers/claude/limits.ts";
 import { planLimitsText } from "../telegram/limits.ts";
 import { MediaGroupCollector } from "../telegram/media-group.ts";
 import { registerPermissionButtons } from "../telegram/permission.ts";
+import { registerCapacityButtons } from "../telegram/capacity.ts";
 import { anyLiveQuery, liveSession, sessionFor, type AgentInput } from "../sessions/topic.ts";
 import { sideTurnReady } from "../sessions/side-turn.ts";
 import {
@@ -74,6 +75,7 @@ import {
   setOpenRouterSettings,
   setCodexSettings,
   setDefaultProgress,
+  setCapacityRetries,
   setEffort,
   setModel,
   setStatus,
@@ -362,6 +364,71 @@ async function sessionTopic(
   return t;
 }
 
+/** Shared by /model, /effort and capacity recovery's Change model button. */
+async function chooseModelOrEffort(ctx: any, thread: number | undefined, isEffort: boolean, requireConfirm = false): Promise<boolean> {
+  const topic = isLauncher(thread) ? undefined : getTopic(thread!);
+  const provider = topic?.provider ?? nextProvider ?? cfg.provider;
+  const inLauncher = isLauncher(thread);
+  const where = inLauncher ? "the next session" : "this topic";
+  const cwd = topic?.cwd ?? cfg.defaultCwd;
+  const nextCodex = !isEffort && provider === "codex" && inLauncher
+    ? codexPresetPicker(nextModel, nextEffort, nextServiceTier).selected(null) : undefined;
+  const codexModels = !isEffort && provider === "codex"
+    ? codexModelPicker(nextCodex?.model ?? topic?.model ?? null,
+      nextCodex?.effort ?? topic?.effort ?? null, nextCodex?.serviceTier ?? topic?.service_tier ?? null)
+    : undefined;
+  const openrouterModels = !isEffort && provider === "openrouter"
+    ? openRouterModelPicker(inLauncher
+      ? nextOpenRouterSettings ?? (nextModel ? { model: nextModel } : null)
+      : topic?.openrouter_settings ?? (topic?.model ? { model: topic.model } : null),
+    cfg.openrouterModel, cfg.openrouterPresets) : undefined;
+  const { picks, cancelled, messageId } = await askPick(bot, {
+    threadId: thread,
+    title: `${isEffort ? "effort" : "model"} for ${where}`,
+    allowCancel: true,
+    requireConfirm,
+    groups: isEffort
+      ? [effortGroup(inLauncher ? nextEffort ?? null : topic?.effort ?? null, cwd, provider)]
+      : [codexModels?.group ?? openrouterModels?.group ??
+        modelGroup(inLauncher ? nextModel ?? null : topic?.model ?? null, provider)],
+  });
+  if (cancelled || messageId === null) return false;
+  // A topic may have been deleted while the picker was on screen.
+  if (topic && !getTopic(topic.thread_id)) return false;
+  if (isEffort) await applyEffort(ctx, thread, asEffort(picks.e ?? null, provider), false);
+  else {
+    const choice = codexModels?.selected(picks.m ?? null);
+    const openrouterChoice = openrouterModels?.selected(picks.o ?? null);
+    if (choice) {
+      if (choice.kind === "preset") await applyCodexPreset(ctx, thread, choice.preset);
+      else await applyModel(ctx, thread, choice.model, false);
+    } else if (openrouterChoice) await applyOpenRouterSettings(ctx, thread, openrouterChoice.settings, false);
+    else await applyModel(ctx, thread, asModel(picks.m ?? null), false);
+  }
+  return true;
+}
+
+async function chooseCapacityRetries(threadId: number): Promise<void> {
+  const topic = getTopic(threadId);
+  if (!topic) return;
+  const resume = liveSession(threadId)?.capacity.pause();
+  try {
+    const values = [...new Set([0, 1, 3, 5, 10, 20, 50, 100, topic.capacity_retries])].sort((a, b) => a - b);
+    const { picks, cancelled, messageId } = await askPick(bot, {
+      threadId,
+      title: "Capacity retries for this topic · every 30 seconds\n0 = off. /retry <0–100> sets any count. Settings survive restarts.",
+      allowCancel: true,
+      groups: [{ key: "r", perRow: 4, initial: String(topic.capacity_retries), fallback: "3",
+        options: values.map(value => ({ value: String(value), label: value === 0 ? "Off" : String(value) })),
+        summary: value => `Capacity retries: ${value ?? topic.capacity_retries} · every 30s`,
+      }],
+    });
+    if (cancelled || messageId === null || !getTopic(threadId)) return;
+    setCapacityRetries(threadId, Number(picks.r ?? topic.capacity_retries));
+    await liveSession(threadId)?.capacity.settingsChanged();
+  } finally { resume?.(); }
+}
+
 /** Run a resolved command without forwarding its original text as a prompt. */
 async function handleCommand(
   ctx: any,
@@ -369,6 +436,22 @@ async function handleCommand(
   parsed: Extract<ParsedCommand, { kind: "command" }>,
 ): Promise<void> {
   const { command: cmd, args } = parsed;
+
+  if (cmd === "/retry") {
+    const topic = thread !== undefined ? getTopic(thread) : undefined;
+    if (!topic || topic.provider !== "codex") {
+      await replySilently(ctx, "Use /retry in a Codex session topic.", { message_thread_id: thread });
+    } else if (args) {
+      if (!/^\d+$/.test(args) || Number(args) > 100) {
+        await replySilently(ctx, "Usage: /retry <0–100>; 0 disables automatic capacity retries.", { message_thread_id: thread });
+      } else {
+        setCapacityRetries(thread!, Number(args));
+        await liveSession(thread!)?.capacity.settingsChanged();
+        await replySilently(ctx, `Capacity retries: ${Number(args)} · every 30s (this topic).`, { message_thread_id: thread });
+      }
+    } else void chooseCapacityRetries(thread!).catch(err => console.warn("[retry] picker failed:", String(err)));
+    return;
+  }
 
   if (cmd === "/progress" || cmd === "/toolcalls") {
     const setting = cmd === "/progress" ? "progress" : "toolcalls";
@@ -532,64 +615,9 @@ async function handleCommand(
       else await applyModel(ctx, thread, value as Model);
       return;
     }
-    // Nothing named — same effect, chosen with the buttons instead. Detached
-    // like the launch picker: waiting on a button from inside a handler would
-    // block the very callback that settles it.
-    const inLauncher = isLauncher(thread);
-    const where = inLauncher ? "the next session" : "this topic";
-    const cwd = topic?.cwd ?? cfg.defaultCwd;
-    const nextCodex =
-      !isEffort && provider === "codex" && inLauncher
-        ? codexPresetPicker(nextModel, nextEffort, nextServiceTier).selected(null)
-        : undefined;
-    const codexModels =
-      !isEffort && provider === "codex"
-        ? codexModelPicker(
-            nextCodex?.model ?? topic?.model ?? null,
-            nextCodex?.effort ?? topic?.effort ?? null,
-            nextCodex?.serviceTier ?? topic?.service_tier ?? null,
-          )
-        : undefined;
-    const openrouterModels =
-      !isEffort && provider === "openrouter"
-        ? openRouterModelPicker(
-            inLauncher
-              ? nextOpenRouterSettings ?? (nextModel ? { model: nextModel } : null)
-              : topic?.openrouter_settings ?? (topic?.model ? { model: topic.model } : null),
-            cfg.openrouterModel,
-            cfg.openrouterPresets,
-          )
-        : undefined;
-    void askPick(bot, {
-      threadId: thread,
-      title: `${isEffort ? "effort" : "model"} for ${where}`,
-      groups: isEffort
-        ? [
-            effortGroup(
-              inLauncher ? (nextEffort ?? null) : (topic?.effort ?? null),
-              cwd,
-              provider,
-            ),
-          ]
-        : [
-            codexModels?.group ??
-              openrouterModels?.group ??
-              modelGroup(inLauncher ? (nextModel ?? null) : (topic?.model ?? null), provider),
-          ],
-    })
-      .then(({ picks }) => {
-        if (isEffort) return applyEffort(ctx, thread, asEffort(picks.e ?? null, provider), false);
-        const choice = codexModels?.selected(picks.m ?? null);
-        if (choice) {
-          return choice.kind === "preset"
-            ? applyCodexPreset(ctx, thread, choice.preset)
-            : applyModel(ctx, thread, choice.model, false);
-        }
-        const openrouterChoice = openrouterModels?.selected(picks.o ?? null);
-        if (openrouterChoice) return applyOpenRouterSettings(ctx, thread, openrouterChoice.settings, false);
-        return applyModel(ctx, thread, asModel(picks.m ?? null), false);
-      })
-      .catch((err) => console.warn(`[${cmd}] applying the picked value failed:`, String(err)));
+    // Detached so Telegram can process the buttons that settle the picker.
+    void chooseModelOrEffort(ctx, thread, isEffort)
+      .catch(err => console.warn(`[${cmd}] applying the picked value failed:`, String(err)));
     return;
   }
 
@@ -1080,6 +1108,22 @@ async function main() {
   // prompts are last and answer anything left over.
   registerPickerButtons(bot);
   registerSessionCancelButtons();
+  registerCapacityButtons(bot, async (threadId, action, messageId, ctx) => {
+    if (action === "settings") return chooseCapacityRetries(threadId);
+    const session = liveSession(threadId);
+    const current = session?.capacity.owns(messageId) ?? false;
+    if (action === "model") {
+      const resume = current ? session?.capacity.pause() : undefined;
+      try {
+        const picked = await chooseModelOrEffort(ctx, threadId, false, true);
+        if (picked && session?.capacity.owns(messageId)) await session.retryCapacity();
+      } finally { resume?.(); }
+      return;
+    }
+    if (!session || !current) return;
+    if (action === "retry") await session.retryCapacity();
+    else await session.interrupt();
+  });
   registerPermissionButtons(bot);
   startSweep(bot);
   // From here on `/telegramify` will adopt sessions into this forum.

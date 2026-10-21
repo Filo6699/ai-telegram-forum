@@ -11,6 +11,7 @@ import type { AgentInput, AgentSession, AgentSessionOptions, AgentSettings, Agen
 import { zeroUsage, type Usage } from "../../sessions/usage.ts";
 import { clearPermissions } from "../../telegram/permission.ts";
 import { CodexResponseUsage, type CodexTokenUsage } from "./token-usage.ts";
+import { isCapacityFailure } from "../../sessions/capacity-retry.ts";
 
 export class CodexAgentSession implements AgentSession {
   private pending: CodexInput[] = [];
@@ -25,6 +26,8 @@ export class CodexAgentSession implements AgentSession {
   private sent = 0;
   private failure: string | null = null;
   private settings: AgentSettings;
+  private capacityInput: CodexInput | null = null;
+  private inputVersion = 0;
 
   constructor(private opts: AgentSessionOptions, private server = new CodexAppServerClient()) {
     this.settings = {
@@ -46,8 +49,17 @@ export class CodexAgentSession implements AgentSession {
   }
 
   async send(input: AgentInput): Promise<void> {
+    this.capacityInput = null;
+    this.inputVersion++;
     this.pending.push(input);
     if (!this.running) void this.run();
+  }
+
+  async retryCapacity(): Promise<boolean> {
+    if (this.closed || !this.capacityInput || this.turnActive || this.pending.length) return false;
+    const input = this.capacityInput;
+    await this.send(input);
+    return true;
   }
 
   async answerQuestion(messageId: number, input: AgentInput): Promise<boolean> {
@@ -103,6 +115,11 @@ export class CodexAgentSession implements AgentSession {
   }
 
   async interrupt(): Promise<boolean> {
+    if (!this.turnActive && this.capacityInput) {
+      this.capacityInput = null;
+      this.inputVersion++;
+      return true;
+    }
     if (!this.turnActive || !this.parentId || !this.activeTurnId) return false;
     this.stopped = true;
     await this.server.request("turn/interrupt", {
@@ -122,6 +139,7 @@ export class CodexAgentSession implements AgentSession {
 
   close(): void {
     this.closed = true;
+    this.capacityInput = null;
     this.questions.close();
     this.server.close();
   }
@@ -164,13 +182,14 @@ export class CodexAgentSession implements AgentSession {
     await this.opts.hooks.beginTurn();
   }
 
-  private async finish(ok: boolean, usage: Usage): Promise<void> {
+  private async finish(ok: boolean, usage: Usage, recoveringCapacity = false): Promise<void> {
     const result: AgentTurnResult = {
       ok,
       usage,
       failure: this.failure,
       stopped: this.stopped,
       sent: this.sent,
+      recoveringCapacity,
     };
     this.turnActive = false;
     this.stopped = false;
@@ -185,20 +204,46 @@ export class CodexAgentSession implements AgentSession {
     try {
       while (!this.closed && this.pending.length) {
         const batch = this.pending.splice(0);
-        const input: CodexInput = {
+        let input: CodexInput = {
           text: batch.map((message) => message.text).filter(Boolean).join("\n\n"),
           images: batch.flatMap((message) => message.images),
         };
-        await this.beginTurn();
-        const parentId = await this.ensureThread();
-        const result = await this.runAppTurn(parentId, input, {
-          onTool: (name, input) => this.opts.hooks.tool(name, input),
-          deliverTelegram: true,
-        });
-        this.failure = result.failure;
-        this.sent = result.sent;
-        this.stopped = result.stopped;
-        await this.finish(result.ok, result.usage);
+        const version = this.inputVersion;
+        let retries = 0;
+        for (;;) {
+          await this.beginTurn();
+          let result: AgentSideResult;
+          let accepted = false;
+          try {
+            const parentId = await this.ensureThread();
+            result = await this.runAppTurn(parentId, input, {
+              onTool: (name, input) => this.opts.hooks.tool(name, input),
+              deliverTelegram: true,
+              onAccepted: () => { accepted = true; },
+            });
+          } catch (err) {
+            // Only an explicit capacity rejection is safe to retry. A lost
+            // connection may already have accepted the request.
+            if (!isCapacityFailure(String(err))) throw err;
+            result = { ok: false, failure: `⚠️ ${String(err)}`, stopped: this.stopped,
+              sent: 0, usage: zeroUsage(), answer: "" };
+          }
+          this.failure = result.failure;
+          this.sent = result.sent;
+          this.stopped = this.stopped || result.stopped;
+          const recover = !result.ok && !this.closed && !this.stopped && isCapacityFailure(result.failure)
+            && Boolean(this.opts.hooks.recoverCapacity);
+          // Accepted turns already retain the user's text and attachments.
+          // Continue that task instead of replaying its input or its tools.
+          if (accepted) input = { text: "Continue the previous request after the model capacity error. Check the existing progress before continuing; do not repeat completed actions.", images: [] };
+          this.capacityInput = recover && version === this.inputVersion ? input : null;
+          await this.finish(result.ok, result.usage, recover);
+          if (!recover || this.closed) break;
+          const retry = await this.opts.hooks.recoverCapacity!(result.failure!, retries, version === this.inputVersion);
+          if (!retry || this.closed || version !== this.inputVersion) break;
+          retries++;
+          this.capacityInput = null;
+        }
       }
     } catch (err) {
       if (!this.stopped) {
@@ -217,7 +262,7 @@ export class CodexAgentSession implements AgentSession {
   private async runAppTurn(
     threadId: string,
     input: CodexInput,
-    options: { onTool(name: string, input?: unknown): void | Promise<void>; deliverTelegram: boolean },
+    options: { onTool(name: string, input?: unknown): void | Promise<void>; deliverTelegram: boolean; onAccepted?(): void },
   ): Promise<AgentSideResult> {
     let turnId: string | null = null;
     let answer = "";
@@ -347,6 +392,7 @@ export class CodexAgentSession implements AgentSession {
         serviceTierForTurn: this.settings.serviceTier ?? "default",
       });
       turnId ??= started.turn.id;
+      options.onAccepted?.();
       if (options.deliverTelegram) {
         try {
           recordCodexTurnTier(threadId, turnId, this.settings.serviceTier ?? "default");

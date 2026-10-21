@@ -56,6 +56,7 @@ interface Live {
   groups: PickGroup[];
   selection: Picks;
   allowCancel: boolean;
+  requireConfirm: boolean;
   timer: ReturnType<typeof setTimeout>;
   settle: (cancelled?: boolean) => void;
 }
@@ -110,6 +111,8 @@ export function askPick(
     firstWaitMs?: number;
     /** Offer an explicit way to abort the caller's flow. */
     allowCancel?: boolean;
+    /** Recovery must not change models or restart work on a picker timeout. */
+    requireConfirm?: boolean;
     /**
      * The caller will rewrite the picker's message itself, so settling only
      * takes the buttons off. Without this the two edits would race, and the
@@ -165,7 +168,8 @@ export function askPick(
             groups,
             selection: { ...initial },
             allowCancel: opts.allowCancel ?? false,
-            timer: setTimeout(settle, opts.firstWaitMs ?? PICK_WAIT_MS),
+            requireConfirm: opts.requireConfirm ?? false,
+            timer: setTimeout(() => settle(opts.requireConfirm ?? false), opts.firstWaitMs ?? PICK_WAIT_MS),
             settle,
           });
         },
@@ -216,7 +220,7 @@ export function registerPickerButtons(bot: Bot): void {
     // Every press restarts the clock: once the user is choosing, we wait.
     p.selection[key] = option.value;
     clearTimeout(p.timer);
-    p.timer = setTimeout(p.settle, PICK_WAIT_MS);
+    p.timer = setTimeout(() => p.settle(p.requireConfirm), PICK_WAIT_MS);
     await ctx.answerCallbackQuery().catch(() => {});
     await ctx.api
       .editMessageReplyMarkup(cfg.chatId, p.messageId, {

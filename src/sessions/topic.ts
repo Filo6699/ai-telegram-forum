@@ -34,6 +34,7 @@ import { TopicRenderer } from "../telegram/render.ts";
 import { TurnStatus } from "../telegram/status.ts";
 import { createTgChannel } from "../telegram/tg-tools.ts";
 import { replyContext } from "../telegram/reply.ts";
+import { CapacityRecovery } from "../telegram/capacity.ts";
 
 export type { AgentInput } from "./types.ts";
 
@@ -51,6 +52,9 @@ export type { AgentInput } from "./types.ts";
 export class TopicSession {
   private out: TopicRenderer;
   private agent: AgentSession;
+  readonly capacity: CapacityRecovery;
+  private inputVersion = 0;
+  private turnInputVersion = 0;
 
   // A settings change asked for mid-turn lands once that turn is over.
   private settingsDirty = false;
@@ -80,6 +84,7 @@ export class TopicSession {
     private openrouterSettings: OpenRouterSettings | null = null,
   ) {
     this.out = new TopicRenderer(bot.api, cfg.chatId, threadId);
+    this.capacity = new CapacityRecovery(bot, threadId, this.out);
     const channel = createTgChannel(this.out, cwd);
     this.agent = createAgentSession({
       bot,
@@ -109,6 +114,9 @@ export class TopicSession {
           if (text) await this.out.sendText(text);
         },
         endTurn: (result) => this.endTurn(result),
+        recoverCapacity: (failure, retries, canRetry) => this.closed ? Promise.resolve(false) : this.capacity.recover(
+          failure, retries, canRetry && this.turnInputVersion === this.inputVersion,
+        ),
       },
     });
   }
@@ -227,7 +235,15 @@ export class TopicSession {
   async send(content: AgentInput): Promise<void> {
     touch(this.threadId);
     this.armIdleTimer();
-    if (content.replyTo && await this.agent.answerQuestion?.(content.replyTo.messageId, content)) return;
+    if (content.replyTo && await this.agent.answerQuestion?.(content.replyTo.messageId, content)) {
+      if (this.capacity.pending) {
+        this.inputVersion++;
+        this.capacity.clear("Superseded by an answer to a native question.");
+      }
+      return;
+    }
+    this.inputVersion++;
+    this.capacity.clear("Superseded by a new message.");
     const progress = getTopic(this.threadId)?.progress ?? "off";
     await this.agent.send({ ...content, text: `${progressInstruction(progress)}\n\n${replyContext(content)}` });
   }
@@ -292,9 +308,20 @@ export class TopicSession {
    * Returns false when there was nothing to interrupt.
    */
   async interrupt(): Promise<boolean> {
-    if (!this.turnActive) return false;
+    const waiting = this.capacity.clear("Retries stopped.");
+    if (waiting) {
+      await this.agent.interrupt();
+      return true;
+    }
+    if (!this.turnActive) return this.agent.interrupt();
     denyPending(this.threadId, "stopped");
     return this.agent.interrupt();
+  }
+
+  async retryCapacity(): Promise<boolean> {
+    if (this.closed) return false;
+    if (this.capacity.retryNow()) return true;
+    return await this.agent.retryCapacity?.() ?? false;
   }
 
   /** Shut the live runner down. The provider session id survives for resume. */
@@ -302,6 +329,7 @@ export class TopicSession {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
     this.closed = true;
+    this.capacity.clear("Session closed. Automatic retries cancelled.");
     // Blanket approvals are scoped to the live session, not to the topic.
     clearPermissions(this.threadId);
     this.agent.close();
@@ -312,7 +340,7 @@ export class TopicSession {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => {
       // Never pull the rug out from under a running turn.
-      if (this.turnActive || this.sideTurns > 0) return this.armIdleTimer();
+      if (this.turnActive || this.sideTurns > 0 || this.capacity.pending) return this.armIdleTimer();
       console.log(`[session] closing idle session for topic ${this.threadId}`);
       forget(this.threadId);
       this.close();
@@ -323,6 +351,7 @@ export class TopicSession {
   private async beginTurn(): Promise<void> {
     if (this.turnActive) return;
     this.turnActive = true;
+    this.turnInputVersion = this.inputVersion;
     this.turnEffort = this.effortLevel;
     this.turnModel = this.modelId;
     this.turnResolvedModel = null;
@@ -364,7 +393,8 @@ export class TopicSession {
     // rather than leaving the topic with nothing but a summary.
     if (result.sent === 0) await this.out.send();
     else this.out.clear();
-    if (result.failure) await this.out.sendText(result.failure);
+    if (result.failure && !result.recoveringCapacity) await this.out.sendText(result.failure);
+    if (!result.recoveringCapacity) this.capacity.clear(result.ok ? "Recovered." : "Turn ended.");
 
     addUsage(this.threadId, result.usage);
     if (this.sessionId) setSession(this.threadId, this.sessionId);
