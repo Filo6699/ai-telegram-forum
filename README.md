@@ -14,7 +14,7 @@ Telegram user.
   <img src="docs/screenshots/session.png" alt="A session in Materialgram showing the task, Cancel button, usage summary, and agent's reply" width="49%">
 </p>
 
-A demo session in Materialgram: adding and testing a health endpoint.
+A demo session in Telegram: adding and testing a health endpoint.
 
 ## Installation
 
