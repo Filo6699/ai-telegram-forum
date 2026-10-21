@@ -52,6 +52,7 @@ export class CapacityRecovery {
   private messageId: number | null = null;
   private failure = "";
   private startedAt = 0;
+  private manualRetry = false;
   private canRetry = false;
   private state = "";
   private generation = 0;
@@ -65,10 +66,15 @@ export class CapacityRecovery {
 
   pause(): () => void { return this.wait.pause(); }
 
-  retryNow(): boolean { return this.wait.finish(true); }
+  retryNow(): boolean {
+    if (!this.wait.pending) return false;
+    this.manualRetry = true;
+    return this.wait.finish(true);
+  }
 
   async recover(failure: string, retries: number, canRetry: boolean): Promise<boolean> {
     const generation = this.generation;
+    this.manualRetry = false;
     this.failure = failure;
     if (retries === 0) this.startedAt = Date.now();
     this.canRetry = canRetry;
@@ -87,6 +93,13 @@ export class CapacityRecovery {
       : this.remainingMs === 0 ? `Retry window ended (${getCapacityRetryMinutes()} min).`
       : "Automatic retries stopped.";
     await this.render();
+    // Telegram can hold an edit for rate limiting. Check again immediately
+    // before returning control to the provider, not just when the timer fired.
+    if (retry && !this.manualRetry && this.remainingMs === 0) {
+      this.state = `Retry window ended (${getCapacityRetryMinutes()} min).`;
+      await this.render();
+      return false;
+    }
     return retry;
   }
 

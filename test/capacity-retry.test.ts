@@ -223,6 +223,25 @@ test("picker time counts toward the window and expiry prevents retrying after re
   assert.equal(await decision, false);
 });
 
+test("a slow Telegram edit cannot start an automatic retry after the deadline", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+  const h = harness();
+  t.after(() => { h.recovery.clear("closed"); h.agent.close(); });
+  setCapacityRetryMinutes(1);
+  let release!: () => void;
+  h.bot.api.editMessageText = async (_chat: number, _id: number, text: string) => {
+    if (text.includes("Retrying")) await new Promise<void>(resolve => { release = resolve; });
+    return true;
+  };
+  const decision = h.recovery.recover(capacity, 0, true);
+  await until(() => h.messages.length === 1);
+  t.mock.timers.tick(30_000);
+  await until(() => Boolean(release));
+  t.mock.timers.tick(30_000);
+  release();
+  assert.equal(await decision, false);
+});
+
 test("settings can stop a wait immediately and an in-flight error send cannot resurrect buttons", async t => {
   const h = harness();
   t.after(() => h.agent.close());
