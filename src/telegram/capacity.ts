@@ -1,7 +1,7 @@
 import { InlineKeyboard, type Bot } from "grammy";
 import { cfg } from "../config/env.ts";
-import { CapacityRetryWait, DEFAULT_CAPACITY_RETRIES } from "../sessions/capacity-retry.ts";
-import { getTopic } from "../storage/db.ts";
+import { CapacityRetryWait } from "../sessions/capacity-retry.ts";
+import { getCapacityRetryMinutes, getTopic } from "../storage/db.ts";
 import { TopicRenderer } from "./render.ts";
 
 export function capacityKeyboard(threadId: number, canRetry: boolean): InlineKeyboard {
@@ -51,7 +51,7 @@ export class CapacityRecovery {
   private wait = new CapacityRetryWait();
   private messageId: number | null = null;
   private failure = "";
-  private retries = 0;
+  private startedAt = 0;
   private canRetry = false;
   private state = "";
   private generation = 0;
@@ -70,32 +70,45 @@ export class CapacityRecovery {
   async recover(failure: string, retries: number, canRetry: boolean): Promise<boolean> {
     const generation = this.generation;
     this.failure = failure;
-    this.retries = retries;
+    if (retries === 0) this.startedAt = Date.now();
     this.canRetry = canRetry;
-    const limit = getTopic(this.threadId)?.capacity_retries ?? DEFAULT_CAPACITY_RETRIES;
-    const decision = canRetry && retries < limit ? this.wait.wait() : null;
+    const minutes = getCapacityRetryMinutes();
+    const decision = canRetry && this.remainingMs > 0 ? this.wait.wait(() => this.deadline) : null;
     this.state = !canRetry ? "Automatic recovery cancelled. Send a new message to continue."
-      : limit === 0 ? "Automatic retries are off."
-      : retries >= limit ? `Retry limit reached (${retries}/${limit}).`
-      : `Retry ${retries + 1}/${limit} in 30 seconds.`;
+      : minutes === 0 ? "Automatic retries are off (global setting)."
+      : this.remainingMs === 0 ? `Retry window ended (${minutes} min).`
+      : this.waitingText();
     await this.render();
     if (!decision) return false;
     const retry = await decision;
     if (generation !== this.generation) return false;
-    this.state = retry ? `Retrying (${retries + 1})…` : "Automatic retries stopped.";
+    this.state = retry ? `Retrying (${retries + 1})…`
+      : getCapacityRetryMinutes() === 0 ? "Automatic retries are off (global setting)."
+      : this.remainingMs === 0 ? `Retry window ended (${getCapacityRetryMinutes()} min).`
+      : "Automatic retries stopped.";
     await this.render();
     return retry;
   }
 
   async settingsChanged(): Promise<void> {
     if (!this.wait.pending) return;
-    const limit = getTopic(this.threadId)?.capacity_retries ?? DEFAULT_CAPACITY_RETRIES;
-    if (this.retries >= limit) {
+    if (this.remainingMs === 0) {
       this.wait.finish(false);
       return;
     }
-    this.state = `Retry ${this.retries + 1}/${limit} in 30 seconds.`;
+    this.wait.refresh();
+    this.state = this.waitingText();
     await this.render();
+  }
+
+  private get deadline(): number { return this.startedAt + getCapacityRetryMinutes() * 60_000; }
+
+  private get remainingMs(): number { return Math.max(0, this.deadline - Date.now()); }
+
+  private waitingText(): string {
+    const remaining = Math.ceil(this.remainingMs / 1000);
+    const next = remaining > 30 ? "Next retry in 30 seconds." : "Window expires before the next retry.";
+    return `${next} ${remaining}s remaining · ${getCapacityRetryMinutes()} min global window.`;
   }
 
   /** Also invalidates a Telegram send still in flight when input/stop arrives. */

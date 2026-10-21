@@ -9,12 +9,11 @@ import type { Model } from "../config/model.ts";
 import type { ServiceTier } from "../config/codex-presets.ts";
 import type { Provider } from "../config/provider.ts";
 import type { OpenRouterSettings } from "../config/openrouter-presets.ts";
-import { DEFAULT_CAPACITY_RETRIES } from "../sessions/capacity-retry.ts";
+import { DEFAULT_CAPACITY_RETRY_MINUTES } from "../sessions/capacity-retry.ts";
 
 export type TopicStatus = "active" | "closed";
 
 export interface Topic {
-  capacity_retries: number;
   progress: Progress;
   toolcalls: Toolcalls;
   thread_id: number;
@@ -93,7 +92,6 @@ db.exec(`
 
 // Migrate older DBs that predate the usage columns.
 for (const col of [
-  `capacity_retries INTEGER NOT NULL DEFAULT ${DEFAULT_CAPACITY_RETRIES}`,
   "progress TEXT NOT NULL DEFAULT 'off'",
   "toolcalls TEXT NOT NULL DEFAULT 'off'",
   "turns INTEGER NOT NULL DEFAULT 0",
@@ -216,11 +214,17 @@ export function setEffort(threadId: number, effort: Effort): void {
   stmts.setEffort.run(effort, threadId);
 }
 
-export function setCapacityRetries(threadId: number, retries: number): void {
-  if (!Number.isSafeInteger(retries) || retries < 0 || retries > 100) {
-    throw new Error("Capacity retries must be an integer between 0 and 100");
+export function getCapacityRetryMinutes(): number {
+  const row = stmts.getSetting.get("capacity_retry_minutes") as { value: string } | undefined;
+  const minutes = row ? Number(row.value) : DEFAULT_CAPACITY_RETRY_MINUTES;
+  return Number.isSafeInteger(minutes) && minutes >= 0 && minutes <= 60 ? minutes : DEFAULT_CAPACITY_RETRY_MINUTES;
+}
+
+export function setCapacityRetryMinutes(minutes: number): void {
+  if (!Number.isSafeInteger(minutes) || minutes < 0 || minutes > 60) {
+    throw new Error("Capacity retry duration must be an integer between 0 and 60 minutes");
   }
-  db.prepare("UPDATE topics SET capacity_retries = ? WHERE thread_id = ?").run(retries, threadId);
+  stmts.setSetting.run("capacity_retry_minutes", String(minutes));
 }
 
 export function setActivity(threadId: number, setting: "progress" | "toolcalls", value: Progress | Toolcalls): void {

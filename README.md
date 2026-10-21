@@ -179,8 +179,9 @@ remain commands.
 - `/model` — choose a model or configured preset; `/model <id>` sets one directly.
 - `/effort` — choose reasoning effort; `/effort high` sets it directly.
 - `/stop` — interrupt the current turn while keeping the session history.
-- `/retry` — configure Codex model-capacity retries for this topic;
-  `/retry <0–100>` sets the count, and `/retry 0` disables automatic retries.
+- `/retry` — configure the global Codex model-capacity retry window;
+  `/retry <0–60>` sets its duration in minutes, and `/retry 0` disables
+  automatic retries globally. Works in the launcher and session topics.
 - `/btw <question>` — ask Claude or Codex a side question without interrupting
   the main task or adding the exchange to its history.
 - `/usage` — show usage and available plan limits. In the launcher, show totals
@@ -209,20 +210,25 @@ and the live status message still appears.
 
 When a Codex main turn fails because the selected model is at capacity, its
 error message includes **Retry settings** and **Change model** buttons.
-The default is **3 retries**, always **30 seconds** apart. The count is saved
-per topic across restarts; it does not apply to quota, authentication, or
-connection errors. Retries keep the selected model. No fallback model is chosen.
+The default is a **3-minute retry window**, with attempts **30 seconds** apart.
+Its duration is **0–60 minutes**, measured from the first capacity failure,
+including time spent on requests and in pickers. No automatic attempt starts
+at or after the deadline. This one global setting applies to all existing and
+new Codex topics and persists across restarts; there are no topic overrides.
+Changing it also updates currently waiting topics. It does not apply to quota,
+authentication, or connection errors. Retries keep the selected model.
+No fallback model is chosen.
 An accepted request continues from its existing history, including attachments
 and completed work; a rejected request is submitted again with its original input.
 
 **Retry now** bypasses the wait (and can start a fresh retry sequence after the
-limit is reached). **Stop** and `/stop` cancel recovery. New user input also
+time window has ended). **Stop** and `/stop` cancel recovery. New user input also
 cancels the old retry so it cannot replay after a newer task. The error message
 is updated in place as retries proceed. Opening a recovery settings or model
 picker pauses the wait; **Change model** uses the same model/preset choices as
 `/model` and retries immediately after confirmation. Cancelling or timing out
 that model picker resumes the previous retry policy. Session shutdown or a bot
-restart cancels pending retries; the saved retry count remains.
+restart cancels pending retries; the saved global duration remains.
 
 ### Continue a terminal session in Telegram
 

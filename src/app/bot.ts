@@ -58,7 +58,7 @@ import { planLimitsText } from "../telegram/limits.ts";
 import { MediaGroupCollector } from "../telegram/media-group.ts";
 import { registerPermissionButtons } from "../telegram/permission.ts";
 import { registerCapacityButtons } from "../telegram/capacity.ts";
-import { anyLiveQuery, liveSession, sessionFor, type AgentInput } from "../sessions/topic.ts";
+import { anyLiveQuery, capacityRetrySettingsChanged, liveSession, sessionFor, type AgentInput } from "../sessions/topic.ts";
 import { sideTurnReady } from "../sessions/side-turn.ts";
 import {
   asProvider,
@@ -75,7 +75,8 @@ import {
   setOpenRouterSettings,
   setCodexSettings,
   setDefaultProgress,
-  setCapacityRetries,
+  getCapacityRetryMinutes,
+  setCapacityRetryMinutes,
   setEffort,
   setModel,
   setStatus,
@@ -408,24 +409,23 @@ async function chooseModelOrEffort(ctx: any, thread: number | undefined, isEffor
   return true;
 }
 
-async function chooseCapacityRetries(threadId: number): Promise<void> {
-  const topic = getTopic(threadId);
-  if (!topic) return;
-  const resume = liveSession(threadId)?.capacity.pause();
+async function chooseCapacityRetryMinutes(threadId: number | undefined): Promise<void> {
+  const current = getCapacityRetryMinutes();
+  const resume = threadId === undefined ? undefined : liveSession(threadId)?.capacity.pause();
   try {
-    const values = [...new Set([0, 1, 3, 5, 10, 20, 50, 100, topic.capacity_retries])].sort((a, b) => a - b);
+    const values = [...new Set([0, 1, 3, 5, 10, 15, 30, 60, current])].sort((a, b) => a - b);
     const { picks, cancelled, messageId } = await askPick(bot, {
       threadId,
-      title: "Capacity retries for this topic · every 30 seconds\n0 = off. /retry <0–100> sets any count. Settings survive restarts.",
+      title: "Global capacity retry window · all Codex topics\nMinutes: 0 = off, up to 60. Retries every 30 seconds. /retry <0–60> sets any duration.",
       allowCancel: true,
-      groups: [{ key: "r", perRow: 4, initial: String(topic.capacity_retries), fallback: "3",
-        options: values.map(value => ({ value: String(value), label: value === 0 ? "Off" : String(value) })),
-        summary: value => `Capacity retries: ${value ?? topic.capacity_retries} · every 30s`,
+      groups: [{ key: "r", perRow: 4, initial: String(current), fallback: "3",
+        options: values.map(value => ({ value: String(value), label: value === 0 ? "Off" : `${value} min` })),
+        summary: value => `Global capacity retry window: ${value ?? current} min · every 30s`,
       }],
     });
-    if (cancelled || messageId === null || !getTopic(threadId)) return;
-    setCapacityRetries(threadId, Number(picks.r ?? topic.capacity_retries));
-    await liveSession(threadId)?.capacity.settingsChanged();
+    if (cancelled || messageId === null) return;
+    setCapacityRetryMinutes(Number(picks.r ?? current));
+    await capacityRetrySettingsChanged();
   } finally { resume?.(); }
 }
 
@@ -438,18 +438,15 @@ async function handleCommand(
   const { command: cmd, args } = parsed;
 
   if (cmd === "/retry") {
-    const topic = thread !== undefined ? getTopic(thread) : undefined;
-    if (!topic || topic.provider !== "codex") {
-      await replySilently(ctx, "Use /retry in a Codex session topic.", { message_thread_id: thread });
-    } else if (args) {
-      if (!/^\d+$/.test(args) || Number(args) > 100) {
-        await replySilently(ctx, "Usage: /retry <0–100>; 0 disables automatic capacity retries.", { message_thread_id: thread });
+    if (args) {
+      if (!/^\d+$/.test(args) || Number(args) > 60) {
+        await replySilently(ctx, "Usage: /retry <0–60 minutes>; 0 disables automatic capacity retries globally.", { message_thread_id: thread });
       } else {
-        setCapacityRetries(thread!, Number(args));
-        await liveSession(thread!)?.capacity.settingsChanged();
-        await replySilently(ctx, `Capacity retries: ${Number(args)} · every 30s (this topic).`, { message_thread_id: thread });
+        setCapacityRetryMinutes(Number(args));
+        await capacityRetrySettingsChanged();
+        await replySilently(ctx, `Global capacity retry window: ${Number(args)} min · every 30s (all Codex topics).`, { message_thread_id: thread });
       }
-    } else void chooseCapacityRetries(thread!).catch(err => console.warn("[retry] picker failed:", String(err)));
+    } else void chooseCapacityRetryMinutes(thread).catch(err => console.warn("[retry] picker failed:", String(err)));
     return;
   }
 
@@ -1109,7 +1106,7 @@ async function main() {
   registerPickerButtons(bot);
   registerSessionCancelButtons();
   registerCapacityButtons(bot, async (threadId, action, messageId, ctx) => {
-    if (action === "settings") return chooseCapacityRetries(threadId);
+    if (action === "settings") return chooseCapacityRetryMinutes(threadId);
     const session = liveSession(threadId);
     const current = session?.capacity.owns(messageId) ?? false;
     if (action === "model") {

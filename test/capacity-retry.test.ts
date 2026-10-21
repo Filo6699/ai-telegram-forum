@@ -1,15 +1,21 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { beforeEach } from "node:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { CAPACITY_RETRY_MS, CapacityRetryWait, isCapacityFailure } from "../src/sessions/capacity-retry.ts";
 import { CapacityRecovery, registerCapacityButtons } from "../src/telegram/capacity.ts";
 import { TopicRenderer } from "../src/telegram/render.ts";
 import { cfg } from "../src/config/env.ts";
-import { createTopic, getTopic, setCapacityRetries } from "../src/storage/db.ts";
+import { createTopic, getTopic, getCapacityRetryMinutes, setCapacityRetryMinutes } from "../src/storage/db.ts";
 import { CodexAgentSession } from "../src/providers/codex/session.ts";
 import { AppServerError, CodexAppServerClient, type AppServerNotification } from "../src/providers/codex/app-server-client.ts";
 import type { AgentSessionOptions, AgentTurnResult } from "../src/sessions/types.ts";
-import { TopicSession } from "../src/sessions/topic.ts";
+import { capacityRetrySettingsChanged, endSession, sessionFor, TopicSession } from "../src/sessions/topic.ts";
 import { askPick, PICK_WAIT_MS, registerPickerButtons } from "../src/telegram/picker.ts";
+
+beforeEach(() => setCapacityRetryMinutes(3));
 
 const capacity = "Selected model is at capacity. Please try a different model.";
 const tick = () => new Promise<void>(setImmediate);
@@ -87,7 +93,7 @@ test("capacity detection excludes rate limits, quota, authentication and ambiguo
 });
 
 test("waits exactly 30 seconds, pauses for pickers and settles only once", async t => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
   const wait = new CapacityRetryWait();
   let settled = false;
   const decision = wait.wait().then(value => { settled = true; return value; });
@@ -107,11 +113,11 @@ test("waits exactly 30 seconds, pauses for pickers and settles only once", async
   assert.equal(await cancelled, false);
 });
 
-test("main Codex turns retry up to the saved limit, reuse one error message and honor model changes", async t => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+test("main Codex turns retry within the global minute window, reuse one error message and honor model changes", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
   const h = harness();
   t.after(() => { h.recovery.clear("closed"); h.agent.close(); });
-  setCapacityRetries(h.threadId, 2);
+  setCapacityRetryMinutes(1);
   await h.agent.send({ text: "original task", images: [{ path: "/tmp/photo.png" } as any] });
   await until(() => h.server.starts.length === 1);
   h.server.complete();
@@ -133,22 +139,20 @@ test("main Codex turns retry up to the saved limit, reuse one error message and 
   h.server.complete();
   await until(() => h.recovery.pending);
   t.mock.timers.tick(CAPACITY_RETRY_MS);
-  await until(() => h.server.starts.length === 3);
-  h.server.complete();
-  await until(() => h.edits.some(e => /limit reached/.test(e.text)));
+  await until(() => h.edits.some(e => /window ended/.test(e.text)));
   t.mock.timers.tick(CAPACITY_RETRY_MS * 10);
   await tick();
-  assert.equal(h.server.starts.length, 3);
+  assert.equal(h.server.starts.length, 2);
   assert.equal(h.messages.length, 1);
-  assert.equal(h.results.length, 3);
+  assert.equal(h.results.length, 2);
   assert.ok(h.results.every(r => r.recoveringCapacity));
 });
 
 test("zero disables automatic retries while a manual retry remains available", async t => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
   const h = harness();
   t.after(() => { h.recovery.clear("closed"); h.agent.close(); });
-  setCapacityRetries(h.threadId, 0);
+  setCapacityRetryMinutes(0);
   await h.agent.send({ text: "work", images: [] });
   await until(() => h.server.starts.length === 1);
   h.server.complete();
@@ -164,12 +168,67 @@ test("zero disables automatic retries while a manual retry remains available", a
   assert.equal(await h.agent.retryCapacity(), false);
 });
 
+test("time spent on requests consumes the minute window regardless of the attempt count", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+  const h = harness();
+  t.after(() => { h.recovery.clear("closed"); h.agent.close(); });
+  setCapacityRetryMinutes(1);
+  await h.agent.send({ text: "work", images: [] });
+  await until(() => h.server.starts.length === 1);
+  h.server.complete();
+  await until(() => h.recovery.pending && h.messages.length === 1);
+  t.mock.timers.tick(30_000);
+  await until(() => h.server.starts.length === 2);
+  // The second request itself takes 40 seconds before rejecting capacity.
+  t.mock.timers.tick(40_000);
+  h.server.complete();
+  await until(() => h.edits.some(e => /window ended/.test(e.text)));
+  assert.equal(h.recovery.pending, false);
+  assert.equal(h.server.starts.length, 2);
+});
+
+test("global duration changes preserve retry cadence and use the original start time", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+  const h = harness();
+  t.after(() => { h.recovery.clear("closed"); h.agent.close(); });
+  setCapacityRetryMinutes(1);
+  const first = h.recovery.recover(capacity, 0, true);
+  await until(() => h.messages.length === 1);
+  t.mock.timers.tick(20_000);
+  setCapacityRetryMinutes(2);
+  await h.recovery.settingsChanged();
+  t.mock.timers.tick(10_000);
+  assert.equal(await first, true);
+  const second = h.recovery.recover(capacity, 1, true);
+  await tick();
+  t.mock.timers.tick(29_000);
+  // Shorten the global window at t=59s: only one second remains.
+  setCapacityRetryMinutes(1);
+  await h.recovery.settingsChanged();
+  t.mock.timers.tick(1_000);
+  assert.equal(await second, false);
+});
+
+test("picker time counts toward the window and expiry prevents retrying after resume", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+  const h = harness();
+  t.after(() => { h.recovery.clear("closed"); h.agent.close(); });
+  setCapacityRetryMinutes(1);
+  const decision = h.recovery.recover(capacity, 0, true);
+  await until(() => h.messages.length === 1);
+  const resume = h.recovery.pause();
+  t.mock.timers.tick(65_000);
+  resume();
+  t.mock.timers.tick(0);
+  assert.equal(await decision, false);
+});
+
 test("settings can stop a wait immediately and an in-flight error send cannot resurrect buttons", async t => {
   const h = harness();
   t.after(() => h.agent.close());
   const decision = h.recovery.recover(capacity, 0, true);
   await until(() => h.messages.length === 1);
-  setCapacityRetries(h.threadId, 0);
+  setCapacityRetryMinutes(0);
   await h.recovery.settingsChanged();
   assert.equal(await decision, false);
   let release!: () => void;
@@ -178,7 +237,7 @@ test("settings can stop a wait immediately and an in-flight error send cannot re
     return { message_id: 99 };
   };
   h.recovery.clear("new input");
-  setCapacityRetries(h.threadId, 3);
+  setCapacityRetryMinutes(3);
   const delayed = h.recovery.recover(capacity, 0, true);
   await until(() => Boolean(release));
   h.recovery.clear("stopped");
@@ -204,7 +263,7 @@ test("explicit capacity RPC rejection retries the original input, while unrelate
 });
 
 test("topic stop, new input and close cancel the retry instead of replaying stale work", async t => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
   for (const action of ["stop", "input", "close"] as const) {
     const h = harness();
     const topic = new TopicSession(h.bot, h.threadId, "/tmp", null, "codex");
@@ -262,18 +321,44 @@ test("capacity buttons authenticate user/chat/topic, pass unknown callbacks and 
   h.agent.close();
 });
 
-test("retry counts are topic-specific and validated before persistence", () => {
+test("retry duration is global, bounded to 0–60 minutes and shared by different topics", async t => {
   const first = harness();
   const second = harness();
-  setCapacityRetries(first.threadId, 7);
-  assert.equal(getTopic(first.threadId)!.capacity_retries, 7);
-  assert.equal(getTopic(second.threadId)!.capacity_retries, 3);
-  for (const value of [-1, 101, 0.5, NaN, Infinity]) assert.throws(() => setCapacityRetries(first.threadId, value));
-  first.agent.close(); second.agent.close();
+  const sessions = [first, second].map(h => sessionFor(h.bot, getTopic(h.threadId)!));
+  t.after(() => { endSession(first.threadId); endSession(second.threadId); first.agent.close(); second.agent.close(); });
+  assert.equal(getCapacityRetryMinutes(), 3);
+  const waiting = sessions.map(session => session.capacity.recover(capacity, 0, true));
+  await until(() => first.messages.length === 1 && second.messages.length === 1);
+  setCapacityRetryMinutes(0);
+  await capacityRetrySettingsChanged();
+  assert.deepEqual(await Promise.all(waiting), [false, false]);
+  assert.equal(getCapacityRetryMinutes(), 0);
+  for (const value of [-1, 61, 0.5, NaN, Infinity]) assert.throws(() => setCapacityRetryMinutes(value));
+  setCapacityRetryMinutes(60);
+  assert.equal(getCapacityRetryMinutes(), 60);
+});
+
+test("global retry minutes survive a process restart and apply to newly created topics", () => {
+  const root = mkdtempSync(join(tmpdir(), "tg-retry-settings-"));
+  const dbUrl = new URL("../src/storage/db.ts", import.meta.url).href;
+  const run = (script: string) => spawnSync(process.execPath, [
+    "--import", import.meta.resolve("tsx"), "--input-type=module", "--eval", script,
+  ], { env: { ...process.env, DB_PATH: join(root, "state.db") }, encoding: "utf8", timeout: 30_000 });
+  try {
+    const saved = run(`const { setCapacityRetryMinutes } = await import(${JSON.stringify(dbUrl)});
+      setCapacityRetryMinutes(17);`);
+    assert.equal(saved.status, 0, saved.stderr);
+    const restored = run(`import assert from "node:assert/strict";
+      const { getCapacityRetryMinutes, createTopic } = await import(${JSON.stringify(dbUrl)});
+      assert.equal(getCapacityRetryMinutes(), 17);
+      createTopic({ threadId: 1, cwd: "/tmp", title: "New Codex topic", provider: "codex" });
+      assert.equal(getCapacityRetryMinutes(), 17);`);
+    assert.equal(restored.status, 0, restored.stderr);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("recovery model pickers require confirmation and cancel on timeout without changing ordinary pickers", async t => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
   const h = harness();
   let handler: any;
   const bot = { api: h.bot.api, on(_filter: string, fn: any) { handler = fn; } } as any;

@@ -528,6 +528,12 @@ export function liveSession(threadId: number): TopicSession | undefined {
   return live.get(threadId);
 }
 
+/** A global policy change also updates every currently waiting topic. */
+export async function capacityRetrySettingsChanged(): Promise<void> {
+  await Promise.all([...live.values()].map(session => session.capacity.settingsChanged()
+    .catch(err => console.warn(`[capacity:${session.threadId}] refreshing settings failed:`, String(err)))));
+}
+
 /**
  * Any topic's running query — the account's rate limits are the same whichever
  * session asks, so `/usage` reuses a warm child instead of starting one.

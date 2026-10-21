@@ -10,7 +10,7 @@ export const botCommands = [
   { command: "toolcalls", description: "Tool calls: off, only_file_edits, full" },
   { command: "model", description: "Model: /model sonnet, or /model for buttons" },
   { command: "stop", description: "Interrupt the turn running in this topic" },
-  { command: "retry", description: "Capacity retries: /retry 3, /retry 0 to disable" },
+  { command: "retry", description: "Global capacity retry window: /retry 0–60 minutes" },
   { command: "resume", description: "Shell command to continue this session in a terminal" },
   { command: "id", description: "Agent session id of this topic" },
 ] as const;
