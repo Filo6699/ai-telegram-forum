@@ -144,6 +144,10 @@ images; other attachments are saved locally and passed as file paths. The agent
 can send screenshots, documents, and other files back. A live status message
 shows tool activity while it works.
 
+If an outgoing attachment fails, the agent receives the failed file paths and
+delivery status, including partial uploads. It is instructed to tell you
+immediately instead of splitting the files into smaller batches to retry.
+
 Codex can ask questions while it works. Each native question appears as a
 separate message with any suggested answers. **Reply to that message** to answer
 that particular question; you can use your own wording. Replies to asynchronous

@@ -6,7 +6,7 @@ import { TelegramQuestions } from "../../telegram/questions.ts";
 import { cfg } from "../../config/env.ts";
 import { recordCodexTurnTier } from "../../storage/db.ts";
 import { PENDING_TITLE_MARK } from "../../sessions/cwd.ts";
-import { tgSendDelivered, type TgSendArgs } from "../../telegram/tg-tools.ts";
+import { TG_ATTACHMENT_FAILURE_GUIDANCE, tgSendDelivered, type TgSendArgs } from "../../telegram/tg-tools.ts";
 import type { AgentInput, AgentSession, AgentSessionOptions, AgentSettings, AgentSideResult, AgentTurnResult } from "../../sessions/types.ts";
 import { zeroUsage, type Usage } from "../../sessions/usage.ts";
 import { clearPermissions } from "../../telegram/permission.ts";
@@ -330,17 +330,34 @@ export class CodexAgentSession implements AgentSession {
           item.tool === "send" &&
           item.status === "completed"
         ) {
-          deliveries.push(
-            this.opts.channel
-              .send(item.arguments as TgSendArgs)
-              .then((result) => {
-                if (tgSendDelivered(result)) sent++;
-                else failure ??= `⚠️ Telegram delivery failed: ${result.content[0]?.text ?? "unknown error"}`;
-              })
-              .catch((err) => {
-                failure ??= `⚠️ Telegram delivery failed: ${String(err)}`;
-              }),
-          );
+          const args = item.arguments as TgSendArgs;
+          deliveries.push((async () => {
+            let feedback: string | null = null;
+            try {
+              const result = await this.opts.channel.send(args);
+              if (tgSendDelivered(result)) sent++;
+              else failure ??= `⚠️ Telegram delivery failed: ${result.content[0]?.text ?? "unknown error"}`;
+              if ("isError" in result) feedback = result.content[0]?.text ?? "Telegram delivery failed";
+            } catch (err) {
+              feedback = `Telegram delivery failed: ${String(err)}`;
+              failure ??= `⚠️ ${feedback}`;
+              feedback += `\n${TG_ATTACHMENT_FAILURE_GUIDANCE}`;
+            }
+            // The inherited MCP server only acknowledges calls; the broker
+            // owns the upload. Return failures to the parent agent as input,
+            // even when the caption or some of the files reached Telegram.
+            if (feedback && args.files?.length && !this.closed && !this.stopped) {
+              try {
+                await this.deliverAnswer({
+                  text: `[Telegram attachment delivery feedback for send call ${item.id}]\n${feedback}`,
+                  images: [],
+                });
+              } catch (err) {
+                console.warn("[codex] attachment failure feedback failed:", String(err));
+                failure ??= `⚠️ Couldn't notify the agent about failed attachments: ${String(err)}`;
+              }
+            }
+          })());
         }
       } else if (event.method === "thread/tokenUsage/updated") {
         const last = params.tokenUsage?.last;

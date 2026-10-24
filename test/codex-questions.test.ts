@@ -13,6 +13,8 @@ import { cfg } from "../src/config/env.ts";
 import { getQuestionPrompt, deleteTopic, itemQuestionPrompts } from "../src/storage/db.ts";
 import type { AgentSessionOptions, AgentTurnResult } from "../src/sessions/types.ts";
 import { TopicSession } from "../src/sessions/topic.ts";
+import { TopicRenderer } from "../src/telegram/render.ts";
+import { runTgSend, type TgSendResult } from "../src/telegram/tg-tools.ts";
 
 const tick = () => new Promise<void>(setImmediate);
 async function until(condition: () => boolean) {
@@ -107,6 +109,81 @@ function harness() {
   };
   return { threadId, sessionId, messages, edits, api, opts, texts, results, server, session, prompts, prompt, emitQuestion };
 }
+
+for (const delivered of [false, true]) {
+  test(`attachment failures reach the active Codex turn (text delivered: ${delivered})`, async (t) => {
+    const h = harness();
+    t.after(() => h.session.close());
+    let sends = 0;
+    h.opts.channel.send = async (args) => {
+      sends++;
+      return runTgSend(new TopicRenderer(h.api as any, cfg.chatId, h.threadId), h.opts.cwd, args);
+    };
+    await h.session.send({ text: "work", images: [] });
+    await until(() => h.server.calls.some((c) => c.method === "turn/start"));
+    const item = {
+      id: "send-image", type: "mcpToolCall", server: "tg", tool: "send", status: "completed",
+      arguments: { text: delivered ? "Here is the image" : "", files: ["missing-feedback-image.png"] },
+    };
+    h.server.emit("item/completed", { threadId: "child-thread", turnId: "child-turn", item });
+    await tick();
+    assert.equal(sends, 0);
+    h.server.emit("item/completed", { threadId: h.sessionId, turnId: "turn-1", item });
+    await until(() => h.server.calls.some((c) => c.method === "turn/steer"));
+    const steer = h.server.calls.find((c) => c.method === "turn/steer")!.params;
+    assert.equal(steer.threadId, h.sessionId);
+    assert.equal(steer.expectedTurnId, "turn-1");
+    assert.match(steer.input[0].text, /send-image[\s\S]*missing-feedback-image.png[\s\S]*Tell the user immediately[\s\S]*Do not split/);
+    assert.equal(sends, 1);
+    h.server.complete(h.sessionId);
+    await until(() => h.results.length === 1);
+    assert.equal(h.results[0]!.sent, delivered ? 1 : 0);
+    assert.equal(h.server.calls.filter((c) => c.method === "turn/start").length, 1);
+  });
+}
+
+test("attachment failure after turn completion starts a follow-up with the delivery feedback", async (t) => {
+  const h = harness();
+  t.after(() => h.session.close());
+  let release!: (result: TgSendResult) => void;
+  h.opts.channel.send = () => new Promise((resolve) => { release = resolve; });
+  await h.session.send({ text: "work", images: [] });
+  await until(() => h.server.calls.some((c) => c.method === "turn/start"));
+  const args = { files: ["missing-feedback-image.png"] };
+  h.server.emit("item/completed", {
+    threadId: h.sessionId, turnId: "turn-1",
+    item: { id: "send-image", type: "mcpToolCall", server: "tg", tool: "send", status: "completed", arguments: args },
+  });
+  h.server.complete(h.sessionId);
+  release(await runTgSend(new TopicRenderer(h.api as any, cfg.chatId, h.threadId), h.opts.cwd, args));
+  await until(() => h.server.calls.filter((c) => c.method === "turn/start").length === 2);
+  const start = h.server.calls.filter((c) => c.method === "turn/start")[1]!.params;
+  assert.match(start.input[0].text, /attachment delivery feedback[\s\S]*missing-feedback-image.png[\s\S]*Do not split/);
+  assert.equal(h.server.calls.some((c) => c.method === "turn/steer"), false);
+  h.server.complete(h.sessionId, "turn-2");
+  await until(() => h.results.length === 2);
+});
+
+test("successful sends and failed text-only sends do not create attachment feedback turns", async (t) => {
+  const h = harness();
+  t.after(() => h.session.close());
+  h.opts.channel.send = async (args) => args.files?.length
+    ? { content: [{ type: "text", text: "sent (1 file(s), id: 1)" }] }
+    : { content: [{ type: "text", text: "delivery failed" }], isError: true, _meta: { delivered: false } };
+  await h.session.send({ text: "work", images: [] });
+  await until(() => h.server.calls.some((c) => c.method === "turn/start"));
+  for (const args of [{ files: ["image.png"] }, { text: "Explanation" }]) {
+    h.server.emit("item/completed", {
+      threadId: h.sessionId, turnId: "turn-1",
+      item: { id: "send", type: "mcpToolCall", server: "tg", tool: "send", status: "completed", arguments: args },
+    });
+  }
+  h.server.complete(h.sessionId);
+  await until(() => h.results.length === 1);
+  assert.equal(h.results[0]!.sent, 1);
+  assert.equal(h.server.calls.some((c) => c.method === "turn/steer"), false);
+  assert.equal(h.server.calls.filter((c) => c.method === "turn/start").length, 1);
+});
 
 test("async questions appear mid-turn, accept replies out of order and never become the final answer", async (t) => {
   const h = harness();

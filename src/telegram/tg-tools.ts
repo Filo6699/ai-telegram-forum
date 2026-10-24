@@ -38,7 +38,9 @@ way to say anything — if you never call it, they see nothing.
   logs, PDFs, an artifact you just produced. Paths are relative to your working
   directory. Images arrive as pictures, everything else as a file; your text
   rides along as the caption. Attach the thing itself rather than describing it,
-  but don't attach source files they can already read.`;
+  but don't attach source files they can already read.
+- If an attachment fails, tell the user immediately. Do not split the files or
+  retry them in smaller batches to work around the failure.`;
 
 export interface TgChannel {
   server: ReturnType<typeof createSdkMcpServer>;
@@ -56,14 +58,22 @@ export interface TgSendArgs {
 }
 
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
-const failure = (s: string) => ({ ...text(s), isError: true as const });
+const failure = (s: string, delivered = false) => ({
+  ...text(s),
+  isError: true as const,
+  _meta: { delivered },
+});
 export type TgSendResult = ReturnType<typeof text> | ReturnType<typeof failure>;
+
+export const TG_ATTACHMENT_FAILURE_GUIDANCE =
+  "Tell the user immediately that the attachment(s) could not be sent. " +
+  "Do not split the files or retry them in smaller batches.";
 
 /** Whether a send call delivered at least its text or one attachment. */
 export function tgSendDelivered(result: TgSendResult): boolean {
   return (
     !("isError" in result) ||
-    result.content[0]?.text.includes("text was sent on its own") === true
+    result._meta?.delivered === true
   );
 }
 
@@ -91,7 +101,9 @@ export async function runTgSend(
     const id = body.trim() ? await out.sendText(body) : null;
     return failure(
       `no file could be attached:\n${errors.join("\n")}` +
-        (id !== null ? "\n(the text was sent on its own)" : ""),
+        (id !== null ? "\n(the text was sent on its own)" : "") +
+        `\n${TG_ATTACHMENT_FAILURE_GUIDANCE}`,
+      id !== null,
     );
   }
 
@@ -100,13 +112,19 @@ export async function runTgSend(
     const id = await out.sendText(body);
     if (id !== null) ids.push(id);
   }
-  if (!ids.length) return failure("delivery failed — Telegram rejected the upload");
-
   const notes = [...errors, ...failed.map((f) => `${f.path}: upload rejected`)];
-  return text(
-    `sent (${files.length - failed.length} file(s), id: ${ids.at(-1)})` +
-      (notes.length ? `\nnot attached:\n${notes.join("\n")}` : ""),
-  );
+  const status = ids.length
+    ? `sent (${files.length - failed.length} file(s), id: ${ids.at(-1)})`
+    : "delivery failed — Telegram rejected the upload";
+  if (notes.length || !ids.length) {
+    return failure(
+      status +
+        (notes.length ? `\nnot attached:\n${notes.join("\n")}` : "") +
+        `\n${TG_ATTACHMENT_FAILURE_GUIDANCE}`,
+      ids.length > 0,
+    );
+  }
+  return text(status);
 }
 
 /**
