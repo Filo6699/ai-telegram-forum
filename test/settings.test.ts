@@ -62,14 +62,18 @@ test("zero still disables topic deletion; negative and overflowing durations fai
 });
 
 test("OpenRouter still requires the API key in env and parses JSON preset objects", () => {
-  const settings = parseSettings({ PROVIDER: "openrouter", OPENROUTER_PRESETS: {
-    Free: { model: "openrouter/free", max_tokens: 4096 },
+  const settings = parseSettings({ PROVIDER: "openrouter", PRESETS: {
+    Free: { provider: "openrouter", model: "openrouter/free", max_tokens: 4096 },
   } });
   assert.throws(() => buildConfig(settings, local), /requires a non-empty OPENROUTER_API_KEY/);
   const cfg = buildConfig(settings, { ...local, OPENROUTER_API_KEY: " test-key " });
   assert.equal(cfg.openrouterApiKey, "test-key");
-  assert.equal(cfg.openrouterPresets[0]?.maxTokens, 4096);
-  assert.throws(() => buildConfig(parseSettings({ CODEX_DEFAULT_PRESET: "missing" }), local), /requires at least one/);
+  assert.equal(cfg.presets[0]?.settings.openrouter?.maxTokens, 4096);
+  assert.equal(cfg.defaultPreset, "Free");
+  // Without a key OpenRouter presets are validated but not offered.
+  const keyless = buildConfig(parseSettings({ PRESETS: settings.PRESETS }), local);
+  assert.deepEqual(keyless.presets, []);
+  assert.throws(() => buildConfig(parseSettings({ DEFAULT_PRESET: "missing" }), local), /does not name a configured preset/);
 });
 
 test("migration preserves the six local values and converts multiline settings to native JSON", () => {
@@ -106,9 +110,10 @@ DELETE_AFTER_HOURS=12
   assert.equal(result.settings.DELETE_AFTER_HOURS, 12);
   assert.equal(result.settings.LAUNCHER_THREAD_ID, "General");
   const cfg = buildConfig(result.settings, env);
-  assert.equal(cfg.codexDefaultPreset, "Quick");
-  assert.equal(cfg.codexPresets[0]?.effort, "low");
-  assert.equal(cfg.codexPresets[0]?.serviceTier, "fast");
+  assert.equal(cfg.defaultPreset, "Quick");
+  assert.equal(cfg.presets[0]?.provider, "codex");
+  assert.equal(cfg.presets[0]?.settings.effort, "low");
+  assert.equal(cfg.presets[0]?.settings.serviceTier, "fast");
   assert.ok(!JSON.stringify(result.settings).includes("test-key"));
 });
 

@@ -1,6 +1,6 @@
 import { fetchCodexSessionUsage } from "./session-usage.ts";
 import { formatCodexWeeklyPercent } from "./quota.ts";
-import type { ServiceTier } from "../../config/codex-presets.ts";
+import type { ServiceTier } from "../../config/service-tier.ts";
 
 /** Raw estimated session spend, used to take a per-turn baseline. */
 export async function codexWeeklyPercent(

@@ -6,9 +6,10 @@ import { dirname } from "node:path";
 import { cfg } from "../config/env.ts";
 import type { Effort } from "../config/effort.ts";
 import type { Model } from "../config/model.ts";
-import type { ServiceTier } from "../config/codex-presets.ts";
+import type { ServiceTier } from "../config/service-tier.ts";
 import type { Provider } from "../config/provider.ts";
-import type { OpenRouterSettings } from "../config/openrouter-presets.ts";
+import type { OpenRouterSettings } from "../config/openrouter-settings.ts";
+import type { ModelSettings } from "../config/presets.ts";
 import { DEFAULT_CAPACITY_RETRY_MINUTES } from "../sessions/capacity-retry.ts";
 
 export type TopicStatus = "active" | "closed";
@@ -133,8 +134,8 @@ const stmts = {
   ),
   setEffort: db.prepare("UPDATE topics SET effort = ? WHERE thread_id = ?"),
   setModel: db.prepare("UPDATE topics SET model = ? WHERE thread_id = ?"),
-  setCodexSettings: db.prepare(
-    "UPDATE topics SET model = ?, effort = ?, service_tier = ? WHERE thread_id = ?",
+  setModelSettings: db.prepare(
+    "UPDATE topics SET model = ?, effort = ?, service_tier = ?, openrouter_settings = ? WHERE thread_id = ?",
   ),
   setOpenRouterSettings: db.prepare(
     "UPDATE topics SET model = ?, effort = NULL, service_tier = NULL, openrouter_settings = ? WHERE thread_id = ?",
@@ -265,14 +266,15 @@ export function setModel(threadId: number, model: Model): void {
   stmts.setModel.run(model, threadId);
 }
 
-/** Apply a configured Codex preset as one persisted settings change. */
-export function setCodexSettings(
-  threadId: number,
-  model: Model,
-  effort: Effort,
-  serviceTier: ServiceTier,
-): void {
-  stmts.setCodexSettings.run(model, effort, serviceTier, threadId);
+/** Apply a complete set of settings, such as a preset, as one persisted change. */
+export function setModelSettings(threadId: number, settings: ModelSettings): void {
+  stmts.setModelSettings.run(
+    settings.model,
+    settings.effort,
+    settings.serviceTier,
+    settings.openrouter ? JSON.stringify(settings.openrouter) : null,
+    threadId,
+  );
 }
 
 /** Remember the tier used for each turn; recent Codex rollouts omit it. */

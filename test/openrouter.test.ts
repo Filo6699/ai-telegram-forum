@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test, { after } from "node:test";
 import { cfg } from "../src/config/env.ts";
 import { normalizeOpenRouterModel } from "../src/config/openrouter-model.ts";
-import { openRouterModelPicker, parseOpenRouterPresets } from "../src/config/openrouter-presets.ts";
+import { parsePresets } from "../src/config/presets.ts";
 
 const historyRoot = await mkdtemp(join(tmpdir(), "openrouter-history-"));
 cfg.openrouterHistoryPath = historyRoot;
@@ -21,25 +21,30 @@ test("OpenRouter model ids preserve slash and :free when copied from links", () 
   assert.equal(normalizeOpenRouterModel("not a model"), null);
 });
 
-test("OpenRouter presets keep optional request settings and short picker callbacks", () => {
-  const presets = parseOpenRouterPresets(
-    JSON.stringify({
-      Free: { model: "openrouter/free" },
-      DeepSeek: {
-        model: "https://openrouter.ai/deepseek/deepseek-v4-flash-0731:free",
-        temperature: 0.2,
-        max_tokens: 4096,
-        reasoning: { effort: "high" },
-        provider: { allow_fallbacks: false },
-        fallbacks: ["google/gemini-2.5-flash"],
-      },
-    }),
-  );
-  assert.equal(presets[1]?.model, "deepseek/deepseek-v4-flash-0731:free");
-  assert.deepEqual(presets[1]?.fallbacks, ["google/gemini-2.5-flash"]);
-  const picker = openRouterModelPicker(null, "openrouter/free", presets);
-  assert.ok(picker.group.options.every((option) => option.value.length < 256));
-  assert.equal(picker.selected("preset:1").settings.temperature, 0.2);
+test("OpenRouter presets keep optional request settings", () => {
+  const presets = parsePresets({
+    Free: { provider: "openrouter", model: "openrouter/free" },
+    DeepSeek: {
+      provider: "openrouter",
+      model: "https://openrouter.ai/deepseek/deepseek-v4-flash-0731:free",
+      temperature: 0.2,
+      max_tokens: 4096,
+      reasoning: { effort: "high" },
+      routing: { allow_fallbacks: false },
+      fallbacks: ["google/gemini-2.5-flash"],
+    },
+  });
+  const deepseek = presets[1]!.settings;
+  assert.equal(deepseek.model, "deepseek/deepseek-v4-flash-0731:free");
+  assert.deepEqual(deepseek.openrouter, {
+    model: "deepseek/deepseek-v4-flash-0731:free",
+    preset: "DeepSeek",
+    temperature: 0.2,
+    maxTokens: 4096,
+    reasoning: { effort: "high" },
+    provider: { allow_fallbacks: false },
+    fallbacks: ["google/gemini-2.5-flash"],
+  });
 });
 
 test("OpenRouter client retries 429 and never sends an empty-key request", async () => {

@@ -34,23 +34,21 @@ import {
   parseModel,
   type Model,
 } from "../config/model.ts";
-import { askPick, LAUNCH_WAIT_MS, registerPickerButtons } from "../telegram/picker.ts";
+import { askPick, LAUNCH_WAIT_MS, registerPickerButtons, type PickGroup, type Picks } from "../telegram/picker.ts";
 import {
-  codexModelPicker,
-  codexPresetPicker,
-  type CodexPresetChoice,
-} from "../telegram/codex-presets.ts";
-import {
-  openRouterModelPicker,
-  type OpenRouterSettings,
-} from "../config/openrouter-presets.ts";
-import { launchPresetPicker } from "../telegram/launch-preset.ts";
+  launchPicker,
+  modelPicker,
+  presetName,
+  providerIcon,
+  settingsLine,
+  type LaunchChoice,
+} from "../telegram/presets.ts";
+import { cloneSettings, NO_SETTINGS, type ModelSettings, type Preset } from "../config/presets.ts";
 import {
   asServiceTier,
   serviceTierGroup,
   serviceTierLabel,
-  type ServiceTier,
-} from "../config/codex-presets.ts";
+} from "../config/service-tier.ts";
 import { fmtTokens } from "../shared/fmt.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { fetchPlanLimits } from "../providers/claude/limits.ts";
@@ -73,7 +71,7 @@ import {
   getTopic,
   getDefaultProgress,
   setOpenRouterSettings,
-  setCodexSettings,
+  setModelSettings,
   setDefaultProgress,
   getCapacityRetryMinutes,
   setCapacityRetryMinutes,
@@ -103,14 +101,23 @@ const isLauncher = (threadId: number | undefined) =>
 
 const fmt = fmtTokens;
 
+const topicSettings = (t: Topic): ModelSettings => ({
+  model: t.model,
+  effort: t.effort,
+  serviceTier: t.service_tier,
+  openrouter: t.openrouter_settings,
+});
+
 function topicUsageText(t: Topic, native?: CodexSessionUsage | null): string {
+  const preset = presetName(t.provider, topicSettings(t));
   return (
     `📊 *${t.title}*\n` +
     `turns: ${t.turns}\n` +
     `agent: ${providerLabel(t.provider)}\n` +
     `model: ${modelLabel(t.model, defaultModel(t.provider), t.provider)}\n` +
+    (preset ? `preset: ${preset}\n` : "") +
     (t.provider === "openrouter"
-      ? `preset: ${t.openrouter_settings?.preset ?? "custom/default"}\n`
+      ? ""
       : `effort: ${effortLabel(t.effort, defaultEffort(t.cwd, t.provider))}\n`) +
     (t.provider === "codex" ? `mode: ${serviceTierLabel(t.service_tier)}\n` : "") +
     `tokens: ${fmt(native?.inputTokens ?? t.in_tokens)} in / ${fmt(native?.outputTokens ?? t.out_tokens)} out\n` +
@@ -123,30 +130,17 @@ function topicUsageText(t: Topic, native?: CodexSessionUsage | null): string {
 }
 
 function totalsText(s = totals(), nativeCodex = false): string {
-  const provider = nextProvider ?? cfg.provider;
-  const preset =
-    provider === "codex" && cfg.codexPresets.length
-      ? codexPresetPicker(nextModel, nextEffort, nextServiceTier).selected(null)
-      : null;
-  const openrouter =
-    provider === "openrouter"
-      ? openRouterModelPicker(nextOpenRouterSettings, cfg.openrouterModel, cfg.openrouterPresets).selected(null)
-      : null;
+  const { provider, settings, preset } = nextLaunch();
   return (
     `📊 *All topics*\n` +
     `topics: ${s.topics} · turns: ${s.turns}\n` +
     `next session agent: ${providerLabel(provider)}\n` +
-    (preset ? `next session preset: ${preset.name}\n` : "") +
-    (openrouter?.settings.preset ? `next session preset: ${openrouter.settings.preset}\n` : "") +
-    `next session model: ${modelLabel(
-      preset?.model ?? openrouter?.settings.model ?? nextModel ?? null,
-      defaultModel(provider),
-      provider,
-    )}\n` +
+    (preset ? `next session preset: ${preset}\n` : "") +
+    `next session model: ${modelLabel(settings.model, defaultModel(provider), provider)}\n` +
     (provider === "openrouter"
       ? ""
-      : `next session effort: ${effortLabel(preset?.effort ?? nextEffort ?? null, defaultEffort(cfg.defaultCwd, provider))}\n`) +
-    (preset ? `next session mode: ${serviceTierLabel(preset.serviceTier)}\n` : "") +
+      : `next session effort: ${effortLabel(settings.effort, defaultEffort(cfg.defaultCwd, provider))}\n`) +
+    (provider === "codex" ? `next session mode: ${serviceTierLabel(settings.serviceTier)}\n` : "") +
     `tokens: ${fmt(s.in_tokens)} in / ${fmt(s.out_tokens)} out\n` +
     `cost: ${s.cost_known ? `$${s.cost_usd.toFixed(4)}` : "unavailable"}` +
     (nativeCodex ? "\n_Codex tokens from available persisted logs; /btw excluded_" : "")
@@ -154,17 +148,31 @@ function totalsText(s = totals(), nativeCodex = false): string {
 }
 
 /**
- * `/effort` and `/model` in the launcher belong to the next session only: they
- * are consumed by the launch that follows, where they arrive as the picker's
- * pre-selection.
+ * `/provider`, `/effort` and `/model` in the launcher belong to the next
+ * session only: they are consumed by the launch that follows, where they
+ * arrive as the picker's pre-selection. Unset fields are no choice at all.
  */
-let nextEffort: Effort | undefined;
+let nextProvider: Provider | undefined;
+let nextSettings: Partial<ModelSettings> = {};
 let defaultProgress: Progress = getDefaultProgress();
 let nextToolcalls: Toolcalls = "off";
-let nextModel: Model | undefined;
-let nextServiceTier: ServiceTier | undefined;
-let nextProvider: Provider | undefined;
-let nextOpenRouterSettings: OpenRouterSettings | undefined;
+
+/** What the next launch starts on if nobody touches its picker. */
+function nextLaunch(): LaunchChoice {
+  const provider = nextProvider ?? cfg.provider;
+  return (
+    launchPicker(provider, nextSettings)?.selected(null) ?? {
+      provider,
+      settings: { ...NO_SETTINGS, ...nextSettings },
+      preset: null,
+    }
+  );
+}
+
+function resetNextSession(): void {
+  nextProvider = undefined;
+  nextSettings = {};
+}
 
 /**
  * Where a `/effort` or `/model` lands. `null` is the launcher — the choice is
@@ -196,8 +204,9 @@ async function applyEffort(
   const t = await target(ctx, thread);
   if (t === undefined) return;
   if (t === null) {
-    const provider = nextProvider ?? cfg.provider;
-    nextEffort = level;
+    const { provider, settings } = nextLaunch();
+    // Built on what the launch would start with, so one change keeps the rest.
+    nextSettings = { ...settings, effort: level };
     if (announce) {
       const label = effortLabel(level, defaultEffort(cfg.defaultCwd, provider));
       await replySilently(ctx, `⚙️ next session: ${label}`, { message_thread_id: thread });
@@ -224,11 +233,15 @@ async function applyModel(
   const t = await target(ctx, thread);
   if (t === undefined) return;
   if (t === null) {
-    const provider = nextProvider ?? cfg.provider;
-    nextModel = model;
-    if (provider === "openrouter") {
-      nextOpenRouterSettings = model ? { model, preset: null } : { model: null };
-    }
+    const { provider, settings } = nextLaunch();
+    nextSettings = {
+      ...settings,
+      model,
+      // A bare OpenRouter model drops the preset's request parameters.
+      ...(provider === "openrouter"
+        ? { openrouter: model ? { model, preset: null } : { model: null } }
+        : {}),
+    };
     if (announce) {
       await replySilently(
         ctx,
@@ -255,56 +268,20 @@ async function applyModel(
   }
 }
 
-/** Apply a complete OpenRouter preset or custom setting atomically. */
-async function applyOpenRouterSettings(
-  ctx: any,
-  thread: number | undefined,
-  settings: OpenRouterSettings,
-  announce = true,
-): Promise<void> {
+/** Apply every setting of one preset at once. */
+async function applyPreset(ctx: any, thread: number | undefined, preset: Preset): Promise<void> {
   const t = await target(ctx, thread);
   if (t === undefined) return;
   if (t === null) {
-    nextOpenRouterSettings = { ...settings };
-    nextModel = settings.model ?? undefined;
-    if (announce) {
-      await replySilently(
-        ctx,
-        `🤖 next session: ${settings.model ?? cfg.openrouterModel}${settings.preset ? ` · 🎛️ ${settings.preset}` : ""}`,
-        { message_thread_id: thread },
-      );
-    }
+    nextProvider = preset.provider;
+    nextSettings = cloneSettings(preset.settings);
     return;
   }
+  // `/model` only offers a topic its own provider's presets.
+  if (preset.provider !== t.provider) return;
   const s = liveSession(t.thread_id);
-  if (s) s.setOpenRouterSettings(settings);
-  else setOpenRouterSettings(t.thread_id, settings);
-  if (announce) {
-    await replySilently(
-      ctx,
-      `🤖 model: ${settings.model ?? cfg.openrouterModel}${settings.preset ? ` · 🎛️ ${settings.preset}` : ""}`,
-      { message_thread_id: thread },
-    );
-  }
-}
-
-/** Apply all settings represented by one configured Codex preset. */
-async function applyCodexPreset(
-  ctx: any,
-  thread: number | undefined,
-  preset: CodexPresetChoice,
-): Promise<void> {
-  const t = await target(ctx, thread);
-  if (t === undefined) return;
-  if (t === null) {
-    nextModel = preset.model;
-    nextEffort = preset.effort;
-    nextServiceTier = preset.serviceTier;
-    return;
-  }
-  const s = liveSession(t.thread_id);
-  if (s) s.setCodexSettings(preset.model, preset.effort, preset.serviceTier);
-  else setCodexSettings(t.thread_id, preset.model, preset.effort, preset.serviceTier);
+  if (s) s.setSettings(preset.settings);
+  else setModelSettings(t.thread_id, cloneSettings(preset.settings));
 }
 
 /** Provider is chosen before a topic exists; changing it would switch session
@@ -323,11 +300,8 @@ async function applyProvider(
     );
     return;
   }
+  resetNextSession();
   nextProvider = provider;
-  nextModel = undefined;
-  nextEffort = undefined;
-  nextServiceTier = undefined;
-  nextOpenRouterSettings = undefined;
   if (announce) {
     await replySilently(ctx, `🧠 next session agent: ${providerLabel(provider)}`, {
       message_thread_id: thread,
@@ -372,40 +346,25 @@ async function chooseModelOrEffort(ctx: any, thread: number | undefined, isEffor
   const inLauncher = isLauncher(thread);
   const where = inLauncher ? "the next session" : "this topic";
   const cwd = topic?.cwd ?? cfg.defaultCwd;
-  const nextCodex = !isEffort && provider === "codex" && inLauncher
-    ? codexPresetPicker(nextModel, nextEffort, nextServiceTier).selected(null) : undefined;
-  const codexModels = !isEffort && provider === "codex"
-    ? codexModelPicker(nextCodex?.model ?? topic?.model ?? null,
-      nextCodex?.effort ?? topic?.effort ?? null, nextCodex?.serviceTier ?? topic?.service_tier ?? null)
-    : undefined;
-  const openrouterModels = !isEffort && provider === "openrouter"
-    ? openRouterModelPicker(inLauncher
-      ? nextOpenRouterSettings ?? (nextModel ? { model: nextModel } : null)
-      : topic?.openrouter_settings ?? (topic?.model ? { model: topic.model } : null),
-    cfg.openrouterModel, cfg.openrouterPresets) : undefined;
+  const current = inLauncher ? nextLaunch().settings : topic ? topicSettings(topic) : NO_SETTINGS;
+  const models = isEffort ? undefined : modelPicker(provider, current);
   const { picks, cancelled, messageId } = await askPick(bot, {
     threadId: thread,
     title: `${isEffort ? "effort" : "model"} for ${where}`,
     allowCancel: true,
     requireConfirm,
-    groups: isEffort
-      ? [effortGroup(inLauncher ? nextEffort ?? null : topic?.effort ?? null, cwd, provider)]
-      : [codexModels?.group ?? openrouterModels?.group ??
-        modelGroup(inLauncher ? nextModel ?? null : topic?.model ?? null, provider)],
+    groups: [models?.group ?? effortGroup(current.effort, cwd, provider)],
   });
   if (cancelled || messageId === null) return false;
   // A topic may have been deleted while the picker was on screen.
   if (topic && !getTopic(topic.thread_id)) return false;
-  if (isEffort) await applyEffort(ctx, thread, asEffort(picks.e ?? null, provider), false);
-  else {
-    const choice = codexModels?.selected(picks.m ?? null);
-    const openrouterChoice = openrouterModels?.selected(picks.o ?? null);
-    if (choice) {
-      if (choice.kind === "preset") await applyCodexPreset(ctx, thread, choice.preset);
-      else await applyModel(ctx, thread, choice.model, false);
-    } else if (openrouterChoice) await applyOpenRouterSettings(ctx, thread, openrouterChoice.settings, false);
-    else await applyModel(ctx, thread, asModel(picks.m ?? null), false);
+  if (!models) {
+    await applyEffort(ctx, thread, asEffort(picks.e ?? null, provider), false);
+    return true;
   }
+  const choice = models.selected(picks.m ?? null);
+  if (choice.kind === "preset") await applyPreset(ctx, thread, choice.preset);
+  else await applyModel(ctx, thread, choice.model, false);
   return true;
 }
 
@@ -595,7 +554,7 @@ async function handleCommand(
     if (isEffort && provider === "openrouter") {
       await replySilently(
         ctx,
-        "⚠️ OpenRouter reasoning is configured in OPENROUTER_PRESETS; choose a preset with `/model`.",
+        "⚠️ OpenRouter reasoning is configured in PRESETS; choose a preset with `/model`.",
         { message_thread_id: thread, parse_mode: "Markdown" },
       );
       return;
@@ -742,6 +701,27 @@ function registerSessionCancelButtons(): void {
 /** Provider-neutral message; each SDK gets the image representation it accepts. */
 const contentOf = (text: string, images: ImagePart[]): AgentInput => ({ text, images });
 
+/** Separate model/effort/mode groups, for a bot with no presets configured. */
+function settingGroups(provider: Provider, settings: ModelSettings, cwd: string): PickGroup[] {
+  const model = modelGroup(settings.model, provider);
+  if (provider === "openrouter") return [model];
+  const effort = effortGroup(settings.effort, cwd, provider);
+  return provider === "codex" ? [model, effort, serviceTierGroup(settings.serviceTier)] : [model, effort];
+}
+
+function settingsFromPicks(provider: Provider, picks: Picks, base: ModelSettings): ModelSettings {
+  const model = asModel(picks.m ?? null);
+  if (provider === "openrouter") {
+    return { ...NO_SETTINGS, model, openrouter: model ? { model, preset: null } : base.openrouter };
+  }
+  return {
+    model,
+    effort: asEffort(picks.e ?? null, provider),
+    serviceTier: provider === "codex" ? asServiceTier(picks.s ?? null) : null,
+    openrouter: null,
+  };
+}
+
 /**
  * Spin up a new topic + session for a launcher message.
  *
@@ -766,57 +746,27 @@ async function launch(
   // the topic created. An untouched picker falls through in seconds, so a
   // launch nobody answers still starts, but once the user reaches for a button
   // the launch waits for them to finish.
-  const presetPicker =
-    provider === "codex" || provider === "openrouter"
-      ? launchPresetPicker(
-          provider,
-          nextModel,
-          nextEffort,
-          nextServiceTier,
-          provider === "openrouter"
-            ? nextOpenRouterSettings ?? (nextModel ? { model: nextModel } : null)
-            : nextOpenRouterSettings,
-        )
-      : undefined;
+  const presets = launchPicker(provider, nextSettings);
+  const custom = { ...NO_SETTINGS, ...nextSettings };
   const { picks, cancelled, messageId } = await askPick(bot, {
     threadId: cfg.launcherThreadId,
     title: `«${title}»`,
-    groups: presetPicker
-      ? [presetPicker.group]
-      : provider === "codex"
-        ? [
-            modelGroup(nextModel ?? null, provider),
-            effortGroup(nextEffort ?? null, cwd, provider),
-            serviceTierGroup(nextServiceTier ?? null),
-          ]
-        : [modelGroup(nextModel ?? null, provider), effortGroup(nextEffort ?? null, cwd, provider)],
+    groups: presets ? [presets.group] : settingGroups(provider, custom, cwd),
     firstWaitMs: LAUNCH_WAIT_MS,
     rewritten: true,
     allowCancel: true,
   });
   if (cancelled) return;
-  const launchChoice = presetPicker?.selected(picks.r ?? null);
-  const selectedProvider = launchChoice?.provider ?? provider;
-  const preset = launchChoice?.provider === "codex" ? launchChoice.codex : undefined;
-  const openrouterSettings =
-    launchChoice?.provider === "openrouter" ? launchChoice.openrouter : undefined;
-  const effort = selectedProvider === "openrouter"
-    ? null
-    : preset?.effort ?? asEffort(picks.e ?? null, selectedProvider);
-  const model = selectedProvider === "openrouter"
-    ? openrouterSettings?.model ?? null
-    : preset?.model ?? asModel(picks.m ?? null);
-  const serviceTier: ServiceTier = selectedProvider === "codex"
-    ? preset?.serviceTier ?? asServiceTier(picks.s ?? null)
-    : null;
+  const choice: LaunchChoice = presets?.selected(picks.r ?? null) ?? {
+    provider,
+    settings: settingsFromPicks(provider, picks, custom),
+    preset: null,
+  };
+  const { provider: selectedProvider, settings } = choice;
   const progress = defaultProgress;
   const toolcalls = nextToolcalls;
   nextToolcalls = "off";
-  nextEffort = undefined;
-  nextModel = undefined;
-  nextServiceTier = undefined;
-  nextOpenRouterSettings = undefined;
-  nextProvider = undefined;
+  resetNextSession();
 
   let topic;
   for (let attempt = 1; ; attempt++) {
@@ -839,10 +789,10 @@ async function launch(
     cwd,
     title,
     provider: selectedProvider,
-    effort,
-    model,
-    serviceTier,
-    openrouterSettings: openrouterSettings ?? null,
+    effort: settings.effort,
+    model: settings.model,
+    serviceTier: settings.serviceTier,
+    openrouterSettings: settings.openrouter,
   });
   setActivity(tid, "progress", progress);
   setActivity(tid, "toolcalls", toolcalls);
@@ -850,14 +800,8 @@ async function launch(
   // The picker becomes the launch line: one message for one launch, rather than
   // the settled picker and a "→ …" note sitting one above the other.
   const line =
-    `→ «${title}»  (cwd: ${cwd})` +
-    (preset
-      ? `  ⚙️ Codex · ${preset.name}`
-      : openrouterSettings?.preset
-        ? `  🌐 OpenRouter · ${openrouterSettings.preset}`
-      : `  🤖 ${modelLabel(model, defaultModel(selectedProvider), selectedProvider)}` +
-        (selectedProvider === "openrouter" ? "" : `  ⚙️ ${effortLabel(effort, defaultEffort(cwd, selectedProvider))}`) +
-        (selectedProvider === "codex" ? `  🚀 ${serviceTierLabel(serviceTier)}` : ""));
+    `→ «${title}»  (cwd: ${cwd})  ${providerIcon(selectedProvider)} ${providerLabel(selectedProvider)} · ` +
+    (choice.preset ?? settingsLine(selectedProvider, settings));
   const posted =
     messageId !== null &&
     (await ctx.api
@@ -905,10 +849,10 @@ async function launch(
     cwd,
     session_id: null,
     provider: selectedProvider,
-    effort,
-    model,
-    service_tier: serviceTier,
-    openrouter_settings: openrouterSettings ?? null,
+    effort: settings.effort,
+    model: settings.model,
+    service_tier: settings.serviceTier,
+    openrouter_settings: settings.openrouter,
   }).send(contentOf(prompt, images));
 }
 

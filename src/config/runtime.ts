@@ -1,5 +1,4 @@
-import { parseCodexPresets, parseDefaultCodexPreset } from "./codex-presets.ts";
-import { parseOpenRouterPresets } from "./openrouter-presets.ts";
+import { parseDefaultPreset, parsePresets } from "./presets.ts";
 import { normalizeOpenRouterModel } from "./openrouter-model.ts";
 import type { Settings } from "./settings.ts";
 
@@ -16,10 +15,6 @@ export function buildConfig(settings: Settings, env: Record<string, string | und
     return value;
   }
 
-  const codexPresets = parseCodexPresets(settings.CODEX_PRESETS === undefined
-    ? undefined : JSON.stringify(settings.CODEX_PRESETS));
-  const openrouterPresets = parseOpenRouterPresets(settings.OPENROUTER_PRESETS === undefined
-    ? undefined : JSON.stringify(settings.OPENROUTER_PRESETS));
   const openrouterModel = normalizeOpenRouterModel(settings.OPENROUTER_MODEL);
   if (!openrouterModel) throw new Error("config.json OPENROUTER_MODEL must be a model id or an openrouter.ai link");
   const openrouterApiKey = env.OPENROUTER_API_KEY?.trim() ?? "";
@@ -27,6 +22,10 @@ export function buildConfig(settings: Settings, env: Record<string, string | und
   if (settings.PROVIDER === "openrouter" && !openrouterEnabled) {
     throw new Error("config.json PROVIDER=openrouter requires a non-empty OPENROUTER_API_KEY in .env");
   }
+  // Every preset is validated; OpenRouter ones are only offered with a key.
+  const allPresets = parsePresets(settings.PRESETS);
+  const presets = allPresets.filter((preset) => preset.provider !== "openrouter" || openrouterEnabled);
+  const defaultPreset = parseDefaultPreset(settings.DEFAULT_PRESET, presets, settings.PROVIDER);
 
   return {
     token: req("BOT_TOKEN"),
@@ -42,14 +41,13 @@ export function buildConfig(settings: Settings, env: Record<string, string | und
     openrouterApiKey,
     openrouterEnabled,
     openrouterModel,
-    openrouterPresets,
     openrouterHistoryPath: settings.OPENROUTER_HISTORY_PATH,
     openrouterMaxSteps: settings.OPENROUTER_MAX_STEPS,
     openrouterTurnTimeoutMs: settings.OPENROUTER_TURN_TIMEOUT_MINUTES * 60_000,
     openrouterMaxToolOutput: settings.OPENROUTER_MAX_TOOL_OUTPUT,
     openrouterContextWindow: settings.OPENROUTER_CONTEXT_WINDOW,
-    codexPresets,
-    codexDefaultPreset: parseDefaultCodexPreset(settings.CODEX_DEFAULT_PRESET, codexPresets),
+    presets,
+    defaultPreset,
     permission: settings.PERMISSION,
     allowedTools: settings.ALLOWED_TOOLS,
     deleteAfterMs: settings.DELETE_AFTER_HOURS * 3600_000,

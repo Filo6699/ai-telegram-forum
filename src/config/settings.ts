@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
+import { rejectLegacyPresets } from "./presets.ts";
 
 const text = z.string().trim().min(1);
 const positive = z.number().finite().positive();
@@ -10,13 +11,13 @@ export const settingsSchema = z.strictObject({
   DEFAULT_CWD: text.default("."),
   PROJECTS: z.record(z.string(), text).default({}),
   PROVIDER: z.enum(["claude", "codex", "openrouter"]).default("claude"),
-  CLAUDE_MODEL: text.default("claude-opus-4-8"),
+  CLAUDE_MODEL: text.default("claude-opus-5-5"),
   CODEX_MODEL: text.default("gpt-5.6-sol"),
+  // One block for every agent; each entry names its own provider.
+  PRESETS: z.record(z.string(), z.unknown()).optional(),
+  DEFAULT_PRESET: text.optional(),
   CODEX_EFFORT: z.enum(["minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
-  CODEX_PRESETS: z.record(z.string(), z.unknown()).optional(),
-  CODEX_DEFAULT_PRESET: text.optional(),
   OPENROUTER_MODEL: text.default("openrouter/free"),
-  OPENROUTER_PRESETS: z.record(z.string(), z.unknown()).optional(),
   OPENROUTER_HISTORY_PATH: text.default("./data/openrouter-sessions"),
   OPENROUTER_MAX_STEPS: positive.int().default(24),
   OPENROUTER_TURN_TIMEOUT_MINUTES: positive.default(30),
@@ -36,6 +37,7 @@ export const settingsSchema = z.strictObject({
 export type Settings = z.infer<typeof settingsSchema>;
 
 export function parseSettings(raw: unknown): Settings {
+  rejectLegacyPresets(raw);
   const result = settingsSchema.safeParse(raw);
   if (!result.success) {
     throw new Error(`Invalid config.json: ${result.error.issues.map((issue) =>

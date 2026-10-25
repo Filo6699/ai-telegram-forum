@@ -1,4 +1,4 @@
-import type { ServiceTier } from "../../config/codex-presets.ts";
+import type { ServiceTier } from "../../config/service-tier.ts";
 
 /**
  * Recalibrated from local Pro windows through 2026-09-11, including Astra.

@@ -14,8 +14,7 @@ import {
 import { formatCodexWeeklyPart } from "../src/providers/codex/summary.ts";
 import { compactMs, fmtTokens } from "../src/shared/fmt.ts";
 import { modelGroup, parseModel } from "../src/config/model.ts";
-import { codexModelPicker, codexPresetName } from "../src/telegram/codex-presets.ts";
-import { asServiceTier, serviceTierGroup } from "../src/config/codex-presets.ts";
+import { asServiceTier, serviceTierGroup } from "../src/config/service-tier.ts";
 
 test("native Codex usage aggregates every response and estimates weekly session spend", () => {
   const lines = [
@@ -230,30 +229,6 @@ test("an explicit native null tier stays standard even with a fast topic fallbac
 test("Codex weekly summary shows this turn before the cumulative session", async () => {
   assert.equal(formatCodexWeeklyPart(2.2, 1.8), "🧠 ≈0.4% | ≈2.2%");
   assert.equal(formatCodexWeeklyPart(2.2), "🧠 ≈2.2%");
-});
-
-test("an exact Codex setting tuple collapses to its preset name", () => {
-  assert.equal(
-    codexPresetName("gpt-5.6-sol", "high", "default", [
-      { name: "Decent", model: "gpt-5.6-sol", effort: "high", serviceTier: "default" },
-    ]),
-    "Decent",
-  );
-  assert.equal(codexPresetName("gpt-5.6-sol", "low", "default", []), null);
-});
-
-test("Codex model picker exposes and selects configured presets", () => {
-  const original = cfg.codexPresets;
-  const preset = { name: "Test", model: "gpt-5.6-sol", effort: "high", serviceTier: "default" } as const;
-  cfg.codexPresets = [preset];
-  try {
-    const picker = codexModelPicker(preset.model, preset.effort, preset.serviceTier);
-    assert.equal(picker.group.initial, "preset:0");
-    assert.deepEqual(picker.selected(null), { kind: "preset", preset });
-    assert.ok(picker.group.options.some((option) => option.label === `🎛️ ${preset.name}`));
-  } finally {
-    cfg.codexPresets = original;
-  }
 });
 
 test("the no-preset Codex launch picker exposes standard and fast modes", () => {

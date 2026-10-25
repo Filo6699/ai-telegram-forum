@@ -15,7 +15,7 @@ import {
   addUsage,
   getTopic,
   setOpenRouterSettings,
-  setCodexSettings,
+  setModelSettings,
   setEffort,
   setModel,
   setSession,
@@ -24,9 +24,10 @@ import {
 } from "../storage/db.ts";
 import { defaultEffort, effortLabel, type Effort } from "../config/effort.ts";
 import { defaultModel, modelLabel, type Model } from "../config/model.ts";
-import type { OpenRouterSettings } from "../config/openrouter-presets.ts";
-import { codexPresetName } from "../telegram/codex-presets.ts";
-import { serviceTierLabel, type ServiceTier } from "../config/codex-presets.ts";
+import type { OpenRouterSettings } from "../config/openrouter-settings.ts";
+import { presetName } from "../telegram/presets.ts";
+import { cloneSettings, type ModelSettings } from "../config/presets.ts";
+import { serviceTierLabel, type ServiceTier } from "../config/service-tier.ts";
 import type { Provider } from "../config/provider.ts";
 import { compactMs, fmtTokens, humanMs } from "../shared/fmt.ts";
 import { clearPermissions, denyPending } from "../telegram/permission.ts";
@@ -185,12 +186,14 @@ export class TopicSession {
     void this.applySettings();
   }
 
-  /** Change the complete Codex preset without exposing an intermediate state. */
-  setCodexSettings(model: Model, effort: Effort, serviceTier: ServiceTier): void {
-    this.modelId = model;
-    this.effortLevel = effort;
-    this.serviceTier = serviceTier;
-    setCodexSettings(this.threadId, model, effort, serviceTier);
+  /** Apply a complete preset at once, without exposing an intermediate state. */
+  setSettings(settings: ModelSettings): void {
+    const next = cloneSettings(settings);
+    this.modelId = next.model;
+    this.effortLevel = next.effort;
+    this.serviceTier = next.serviceTier;
+    this.openrouterSettings = next.openrouter;
+    setModelSettings(this.threadId, next);
     if (this.turnActive) {
       this.settingsDirty = true;
       return;
@@ -198,34 +201,18 @@ export class TopicSession {
     void this.applySettings();
   }
 
-  /** Apply one complete OpenRouter preset, including its optional parameters. */
-  setOpenRouterSettings(settings: OpenRouterSettings): void {
-    this.openrouterSettings = {
-      ...settings,
-      ...(settings.fallbacks ? { fallbacks: [...settings.fallbacks] } : {}),
-      ...(settings.provider ? { provider: { ...settings.provider } } : {}),
+  private get settings(): ModelSettings {
+    return {
+      model: this.modelId,
+      effort: this.effortLevel,
+      serviceTier: this.serviceTier,
+      openrouter: this.openrouterSettings,
     };
-    this.modelId = settings.model;
-    this.effortLevel = null;
-    setOpenRouterSettings(this.threadId, this.openrouterSettings);
-    setModel(this.threadId, settings.model);
-    setEffort(this.threadId, null);
-    if (this.turnActive) {
-      this.settingsDirty = true;
-      return;
-    }
-    void this.applySettings();
   }
 
   private async applySettings(): Promise<void> {
     this.settingsDirty = false;
-    await this.agent.applySettings({
-      sessionId: this.sessionId,
-      effort: this.effortLevel,
-      model: this.modelId,
-      serviceTier: this.serviceTier,
-      openrouter: this.openrouterSettings,
-    });
+    await this.agent.applySettings({ sessionId: this.sessionId, ...this.settings });
   }
 
   /**
@@ -268,7 +255,7 @@ export class TopicSession {
       undefined,
       this.provider,
     );
-    const preset = codexPresetName(this.modelId, this.effortLevel, this.serviceTier);
+    const preset = presetName(this.provider, this.settings);
     await status.start();
 
     try {
@@ -384,7 +371,12 @@ export class TopicSession {
     );
     const preset =
       this.provider === "codex"
-        ? codexPresetName(this.turnModel, this.turnEffort, this.turnServiceTier)
+        ? presetName(this.provider, {
+            model: this.turnModel,
+            effort: this.turnEffort,
+            serviceTier: this.turnServiceTier,
+            openrouter: null,
+          })
         : null;
     this.status = null;
     this.turnActive = false;

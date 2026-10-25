@@ -3,7 +3,7 @@ import { cfg } from "../../config/env.ts";
 import type { Effort } from "../../config/effort.ts";
 import type { ImagePart } from "../../telegram/media.ts";
 import type { Model } from "../../config/model.ts";
-import type { ServiceTier } from "../../config/codex-presets.ts";
+import type { ServiceTier } from "../../config/service-tier.ts";
 import { TG_SYSTEM_PROMPT } from "../../telegram/tg-tools.ts";
 
 export interface CodexInput {

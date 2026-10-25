@@ -22,10 +22,10 @@ interface Known {
  * they are not in these compact lists.
  */
 const CLAUDE_MODELS: Known[] = [
-  { id: "claude-opus-5", label: "Opus 5", alias: "opus" },
-  { id: "claude-sonnet-5", label: "Sonnet 5", alias: "sonnet" },
-  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5", alias: "haiku" },
-  { id: "claude-fable-5", label: "Fable 5", alias: "fable" },
+  { id: "claude-opus-5-5", label: "Opus 5.5", alias: "opus" },
+  { id: "claude-fable-5-1", label: "Fable 5.1", alias: "fable" },
+  { id: "claude-sonnet-5-5", label: "Sonnet 5.5", alias: "sonnet" },
+  { id: "claude-haiku-5-5", label: "Haiku 5.5", alias: "haiku" },
 ];
 
 const CODEX_MODELS: Known[] = [

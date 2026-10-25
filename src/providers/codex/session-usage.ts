@@ -7,7 +7,7 @@ import {
   estimateCodexWeeklyPercent,
   type CodexTokenBreakdown,
 } from "./quota.ts";
-import type { ServiceTier } from "../../config/codex-presets.ts";
+import type { ServiceTier } from "../../config/service-tier.ts";
 import { CodexResponseUsage } from "./token-usage.ts";
 import { codexRolloutIndex } from "./rollout-index.ts";
 

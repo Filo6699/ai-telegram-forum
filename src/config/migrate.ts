@@ -1,12 +1,15 @@
 import { parse as parseEnv } from "dotenv";
 import { buildConfig } from "./runtime.ts";
+import { upgradeLegacyPresets } from "./presets.ts";
 import { parseSettings, settingsSchema } from "./settings.ts";
 
 export const LOCAL_ENV_KEYS = [
   "BOT_TOKEN", "FORUM_CHAT_ID", "ALLOWED_USER_ID", "OPENROUTER_API_KEY", "DB_PATH", "PID_PATH",
 ] as const;
 
-const JSON_KEYS = new Set(["PROJECTS", "CODEX_PRESETS", "OPENROUTER_PRESETS"]);
+const JSON_KEYS = new Set(["PROJECTS", "PRESETS", "CODEX_PRESETS", "OPENROUTER_PRESETS"]);
+// Old .env files carry per-provider presets; they are merged into PRESETS.
+const LEGACY_KEYS = new Set(["CODEX_PRESETS", "CODEX_DEFAULT_PRESET", "OPENROUTER_PRESETS"]);
 const NUMBER_KEYS = new Set([
   "OPENROUTER_MAX_STEPS", "OPENROUTER_TURN_TIMEOUT_MINUTES", "OPENROUTER_MAX_TOOL_OUTPUT",
   "OPENROUTER_CONTEXT_WINDOW", "DELETE_AFTER_HOURS", "SESSION_IDLE_MINUTES", "PERMISSION_TIMEOUT_MINUTES",
@@ -19,7 +22,7 @@ export function splitLegacyEnv(source: string) {
   for (const [key, value] of Object.entries(env)) {
     if ((LOCAL_ENV_KEYS as readonly string[]).includes(key)) continue;
     const setting = key === "MODEL" ? "CLAUDE_MODEL" : key;
-    if (!(setting in settingsSchema.shape)) {
+    if (!(setting in settingsSchema.shape) && !LEGACY_KEYS.has(setting)) {
       throw new Error(`Cannot migrate unknown env var ${key}; move it out of .env first`);
     }
     if (key === "MODEL" && env.CLAUDE_MODEL !== undefined) continue;
@@ -39,7 +42,7 @@ export function splitLegacyEnv(source: string) {
       raw[setting] = value;
     }
   }
-  const settings = parseSettings(raw);
+  const settings = parseSettings(upgradeLegacyPresets(raw));
   buildConfig(settings, env); // Validate presets and required credentials before writing either file.
 
   // Match dotenv's assignment grammar so quoted multiline values and paths are

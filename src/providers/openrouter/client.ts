@@ -1,5 +1,5 @@
 import { cfg } from "../../config/env.ts";
-import type { OpenRouterProviderPreferences, OpenRouterSettings } from "../../config/openrouter-presets.ts";
+import type { OpenRouterProviderPreferences, OpenRouterSettings } from "../../config/openrouter-settings.ts";
 
 export type OpenRouterContentPart =
   | { type: "text"; text: string }

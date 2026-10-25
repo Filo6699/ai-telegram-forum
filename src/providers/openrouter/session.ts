@@ -11,7 +11,7 @@ import { cfg } from "../../config/env.ts";
 import { zeroUsage, type Usage } from "../../sessions/usage.ts";
 import { OpenRouterClient, OpenRouterError, openRouterCapabilityError, openRouterModelMetadata, openRouterUsage, type OpenRouterMessage, type OpenRouterResponse } from "./client.ts";
 import { OpenRouterHistory } from "./history.ts";
-import type { OpenRouterSettings } from "../../config/openrouter-presets.ts";
+import type { OpenRouterSettings } from "../../config/openrouter-settings.ts";
 import { executeOpenRouterTool, OPENROUTER_TOOLS, toolInput, type OpenRouterToolContext } from "./tools.ts";
 import { TG_SEND_TOOL, type TgChannel } from "../../telegram/tg-tools.ts";
 

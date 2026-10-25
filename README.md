@@ -278,32 +278,45 @@ npm run telegramify -- --provider codex --session <session-id>
 
 ### Model presets
 
-Defaults and optional picker presets live in `config.json`:
-`CLAUDE_MODEL`, `CODEX_MODEL`, `CODEX_PRESETS`, `CODEX_DEFAULT_PRESET`,
-`OPENROUTER_MODEL`, and `OPENROUTER_PRESETS`.
-When starting a Codex or OpenRouter session, the configured Codex presets and
-OpenRouter presets appear in one picker. Choosing `Free` or `Deepseek` switches
-that new topic to OpenRouter automatically. Add native JSON objects, for example:
+`config.json` holds the default models (`CLAUDE_MODEL`, `CODEX_MODEL`,
+`OPENROUTER_MODEL`) and one `PRESETS` block for all agents. Each preset names
+its own `provider`. The launch picker shows every preset, and picking one of
+another provider switches the new topic to that agent. `/model` inside a topic
+offers only that topic's provider presets.
 
 ```json
 {
-  "CODEX_PRESETS": {
-    "Decent": {"model": "gpt-5.6-sol", "effort": "high"},
-    "Quick": {"model": "gpt-5.6-sol", "effort": "low", "fast": true}
+  "PROVIDER": "claude",
+  "PRESETS": {
+    "Opus": {"provider": "claude", "model": "claude-opus-5-5", "effort": "high"},
+    "Decent": {"provider": "codex", "model": "gpt-5.6-sol", "effort": "high"},
+    "Quick": {"provider": "codex", "model": "gpt-5.6-sol", "effort": "low", "fast": true},
+    "Free": {"provider": "openrouter", "model": "openrouter/free"}
   },
-  "CODEX_DEFAULT_PRESET": "Decent",
-  "OPENROUTER_PRESETS": {
-    "Free": {"model": "openrouter/free"}
-  }
+  "DEFAULT_PRESET": "Opus"
 }
 ```
 
-Codex presets support `serviceTier` (`default` or `fast`) and `light` as an alias
-for `low` effort. Without presets, the picker shows separate model and effort
-grids. Optional `CODEX_EFFORT` sets the default effort before falling back to
-Codex's native configuration. OpenRouter presets also support `temperature`,
-`max_tokens`, `reasoning`, `provider`, and up to three `fallbacks` model IDs.
-OpenRouter appears only when its API key is configured in `.env`.
+`DEFAULT_PRESET` must belong to `PROVIDER`; without it the launch starts on that
+provider's first preset. After `/provider codex`, the launch starts on the first
+Codex preset. Labels must be unique, ignoring case.
+
+Fields per provider:
+
+- `claude`: `model` (a `claude-…` id) and `effort` (`low` to `max`).
+- `codex`: `model`, `effort` (`minimal` to `max`, `light` = `low`), and
+  `serviceTier` (`default` or `fast`; `"fast": true` works too).
+- `openrouter`: `model` (an id or an openrouter.ai link), plus optional
+  `temperature`, `max_tokens`, `reasoning`, `routing` (OpenRouter provider
+  preferences) and up to three `fallbacks`. OpenRouter presets appear only
+  when `.env` has an API key.
+
+A launcher `/model` or `/effort` choice that matches no preset shows up as
+**Custom**. With no presets at all, the picker shows separate model and effort
+grids. Optional `CODEX_EFFORT` sets the Codex default effort before Codex's
+native configuration. The old `CODEX_PRESETS`, `CODEX_DEFAULT_PRESET` and
+`OPENROUTER_PRESETS` keys now fail with a hint; `npm run migrate-config`
+converts them when it moves settings out of `.env`.
 
 ## Permissions and stored data
 
