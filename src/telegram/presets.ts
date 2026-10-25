@@ -20,7 +20,7 @@ export interface LaunchChoice {
 
 export type ModelChoice = { kind: "preset"; preset: Preset } | { kind: "model"; model: Model };
 
-const ICONS: Record<Provider, string> = { claude: "✳️", codex: "⚙️", openrouter: "🌐" };
+const ICONS: Record<Provider, string> = { claude: "✳️", codex: "💠", openrouter: "🌐" };
 
 export const providerIcon = (provider: Provider): string => ICONS[provider];
 

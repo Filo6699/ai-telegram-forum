@@ -106,7 +106,7 @@ test("the launch picker offers every provider's presets and switches agent with 
     const picker = launchPicker("claude", {})!;
     assert.deepEqual(
       picker.group.options.map((option) => option.label),
-      ["✳️ Opus", "⚙️ Quick", "⚙️ Decent", "🌐 Free"],
+      ["✳️ Opus", "💠 Quick", "💠 Decent", "🌐 Free"],
     );
     assert.equal(picker.selected(null).preset, "Opus");
     const codex = picker.selected("p1");
@@ -147,7 +147,7 @@ test("/model in a topic lists only its own provider's presets", () => {
     assert.equal(picker.group.initial, "preset:1");
     assert.deepEqual(picker.selected(null), { kind: "preset", preset: presets[2] });
     const labels = picker.group.options.map((option) => option.label);
-    assert.ok(labels.includes("⚙️ Quick") && !labels.includes("✳️ Opus"));
+    assert.ok(labels.includes("💠 Quick") && !labels.includes("✳️ Opus"));
     assert.deepEqual(picker.selected("model:gpt-6-luna"), { kind: "model", model: "gpt-6-luna" });
   });
 });
@@ -157,7 +157,7 @@ test("/model in the launcher lists every preset, since a preset picks the agent"
   withPresets(presets, "Opus", () => {
     const picker = modelPicker("claude", presets[0]!.settings, true);
     const labels = picker.group.options.map((option) => option.label);
-    assert.deepEqual(labels.slice(0, 4), ["✳️ Opus", "⚙️ Quick", "⚙️ Decent", "🌐 Free"]);
+    assert.deepEqual(labels.slice(0, 4), ["✳️ Opus", "💠 Quick", "💠 Decent", "🌐 Free"]);
     assert.equal(picker.group.initial, "preset:0");
     assert.deepEqual(picker.selected("preset:1"), { kind: "preset", preset: presets[1] });
   });
