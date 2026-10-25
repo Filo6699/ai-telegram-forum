@@ -347,7 +347,7 @@ async function chooseModelOrEffort(ctx: any, thread: number | undefined, isEffor
   const where = inLauncher ? "the next session" : "this topic";
   const cwd = topic?.cwd ?? cfg.defaultCwd;
   const current = inLauncher ? nextLaunch().settings : topic ? topicSettings(topic) : NO_SETTINGS;
-  const models = isEffort ? undefined : modelPicker(provider, current);
+  const models = isEffort ? undefined : modelPicker(provider, current, inLauncher);
   const { picks, cancelled, messageId } = await askPick(bot, {
     threadId: thread,
     title: `${isEffort ? "effort" : "model"} for ${where}`,

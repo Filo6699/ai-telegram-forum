@@ -130,15 +130,18 @@ export function launchPicker(
 }
 
 /**
- * `/model` offers the provider's presets beside its individual models, as one
+ * `/model` offers presets beside the provider's individual models, as one
  * mutually-exclusive group: a preset applies its complete settings, while a
- * model button keeps the current effort and mode.
+ * model button keeps the current effort and mode. The launcher lists every
+ * preset, since a preset there also picks the agent; an existing topic can't
+ * change agent, so it only gets its own provider's presets.
  */
 export function modelPicker(
   provider: Provider,
   current: ModelSettings,
+  inLauncher: boolean,
 ): { group: PickGroup; selected(value: PickValue): ModelChoice } {
-  const presets = presetsFor(provider);
+  const presets = inLauncher ? cfg.presets : presetsFor(provider);
   const models = modelGroup(current.model, provider);
   if (current.model && !models.options.some((option) => option.value === current.model)) {
     models.options.unshift({
@@ -163,7 +166,10 @@ export function modelPicker(
     group: {
       key: "m",
       options: [
-        ...presets.map((preset, index) => ({ value: `preset:${index}`, label: `🎛️ ${preset.name}` })),
+        ...presets.map((preset, index) => ({
+          value: `preset:${index}`,
+          label: `${providerIcon(preset.provider)} ${preset.name}`,
+        })),
         ...models.options.map((option) => ({ value: `model:${option.value}`, label: option.label })),
       ],
       perRow: 2,
