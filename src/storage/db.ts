@@ -18,6 +18,8 @@ export interface Topic {
   toolcalls: Toolcalls;
   thread_id: number;
   session_id: string | null;
+  /** Terminal session whose persistent native fork was created by telegramify. */
+  source_session_id: string | null;
   /** Existing rows predate providers and are migrated as Claude topics. */
   provider: Provider;
   cwd: string;
@@ -47,6 +49,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS topics (
     thread_id     INTEGER PRIMARY KEY,
     session_id    TEXT,
+    source_session_id TEXT,
     provider      TEXT NOT NULL DEFAULT 'claude',
     cwd           TEXT NOT NULL,
     title         TEXT NOT NULL,
@@ -104,6 +107,7 @@ for (const col of [
   "service_tier TEXT",
   "openrouter_settings TEXT",
   "provider TEXT NOT NULL DEFAULT 'claude'",
+  "source_session_id TEXT",
 ]) {
   try {
     db.exec(`ALTER TABLE topics ADD COLUMN ${col}`);
@@ -112,6 +116,9 @@ for (const col of [
   }
 }
 
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS topics_source_session
+  ON topics (provider, source_session_id) WHERE source_session_id IS NOT NULL`);
+
 const stmts = {
   getSetting: db.prepare("SELECT value FROM settings WHERE key = ?"),
   setSetting: db.prepare(
@@ -119,9 +126,10 @@ const stmts = {
   ),
   get: db.prepare("SELECT * FROM topics WHERE thread_id = ?"),
   bySession: db.prepare("SELECT * FROM topics WHERE provider = ? AND session_id = ?"),
+  bySourceSession: db.prepare("SELECT * FROM topics WHERE provider = ? AND source_session_id = ?"),
   insert: db.prepare(
-    `INSERT INTO topics (thread_id, session_id, provider, cwd, title, effort, model, service_tier, openrouter_settings, status, last_activity, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+    `INSERT INTO topics (thread_id, session_id, source_session_id, provider, cwd, title, effort, model, service_tier, openrouter_settings, status, last_activity, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
   ),
   setEffort: db.prepare("UPDATE topics SET effort = ? WHERE thread_id = ?"),
   setModel: db.prepare("UPDATE topics SET model = ? WHERE thread_id = ?"),
@@ -182,6 +190,12 @@ export function findBySession(sessionId: string, provider: Provider = "claude"):
   return stmts.bySession.get(provider, sessionId) as unknown as Topic | undefined;
 }
 
+/** Repeated Codex handoffs reuse the topic created from this terminal session. */
+export function findBySourceSession(sessionId: string, provider: Provider): Topic | undefined {
+  const raw = stmts.bySourceSession.get(provider, sessionId);
+  return raw ? decodeTopic(raw) : undefined;
+}
+
 export function createTopic(t: {
   threadId: number;
   cwd: string;
@@ -193,11 +207,13 @@ export function createTopic(t: {
   openrouterSettings?: OpenRouterSettings | null;
   /** Set when adopting a session that already exists on disk (`/telegramify`). */
   sessionId?: string | null;
+  sourceSessionId?: string | null;
 }): void {
   const now = Date.now();
   stmts.insert.run(
     t.threadId,
     t.sessionId ?? null,
+    t.sourceSessionId ?? null,
     t.provider ?? "claude",
     t.cwd,
     t.title,

@@ -1,10 +1,10 @@
-/** Adopt an existing Codex terminal session into a Telegram topic. */
+/** Continue a Codex terminal session in Telegram through a persistent native fork. */
 import { resolve } from "node:path";
 import { Api } from "grammy";
 import { codexRequest } from "../providers/codex/app-server.ts";
 import { cfg } from "../config/env.ts";
 import { isPendingTitle, placeholderTitle } from "../sessions/cwd.ts";
-import { createTopic, findBySession, setStatus } from "../storage/db.ts";
+import { createTopic, findBySession, findBySourceSession, setStatus } from "../storage/db.ts";
 import { brokerPid } from "../app/heartbeat.ts";
 import { TopicRenderer } from "../telegram/render.ts";
 
@@ -54,20 +54,20 @@ function parseArgs(argv: string[]): Args {
   return out;
 }
 
-async function readThread(id: string): Promise<CodexThread> {
-  const result = await codexRequest<{ thread: CodexThread }>("thread/read", {
+async function readThread(id: string, request: typeof codexRequest): Promise<CodexThread> {
+  const result = await request<{ thread: CodexThread }>("thread/read", {
     threadId: id,
     includeTurns: true,
   });
   return result.thread;
 }
 
-async function resolveThread(args: Args): Promise<CodexThread> {
+async function resolveThread(args: Args, request: typeof codexRequest): Promise<CodexThread> {
   const id = args.session ?? process.env.CODEX_THREAD_ID ?? process.env.CODEX_SESSION_ID;
-  if (id) return readThread(id);
+  if (id) return readThread(id, request);
 
   const cwd = resolve(args.cwd ?? process.cwd());
-  const result = await codexRequest<{ data: CodexThread[] }>("thread/list", {
+  const result = await request<{ data: CodexThread[] }>("thread/list", {
     cwd,
     limit: 1,
     sortKey: "recency_at",
@@ -76,7 +76,7 @@ async function resolveThread(args: Args): Promise<CodexThread> {
   });
   const thread = result.data[0];
   if (!thread) throw new Error(`no Codex sessions found for ${cwd}`);
-  return readThread(thread.id);
+  return readThread(thread.id, request);
 }
 
 function clip(text: string): string {
@@ -113,27 +113,39 @@ function topicLink(threadId: number): string {
   return `https://t.me/c/${internal}/${threadId}`;
 }
 
-export async function adoptCodex(argv: string[]): Promise<void> {
+interface CodexAdoptionDependencies {
+  request: typeof codexRequest;
+  api: Pick<Api, "createForumTopic" | "reopenForumTopic" | "deleteForumTopic" | "sendMessage">;
+  brokerPid: typeof brokerPid;
+}
+
+export async function adoptCodex(argv: string[], deps: CodexAdoptionDependencies = {
+  request: codexRequest, api: new Api(cfg.token), brokerPid,
+}): Promise<void> {
   const args = parseArgs(argv);
-  if (brokerPid() === null) {
+  if (deps.brokerPid() === null) {
     throw new Error(
       "the ai-telegram-forum broker isn't running — start it with `npm start` " +
         `in ${process.cwd()} and try again`,
     );
   }
 
-  const thread = await resolveThread(args);
+  const thread = await resolveThread(args, deps.request);
   const cwd = resolve(args.cwd ?? thread.cwd);
-  const existing = findBySession(thread.id, "codex");
-  const api = new Api(cfg.token);
+  const bound = findBySession(thread.id, "codex");
+  // Legacy direct adoptions must get a new fork too; their live topic may still
+  // be using the original, so never rewrite its binding under a running agent.
+  const existing = findBySourceSession(thread.id, "codex") ?? (bound?.source_session_id ? bound : undefined);
+  const api = deps.api;
   if (existing) {
-    if (existing.status === "closed") {
+    if (!args.dryRun && existing.status === "closed") {
       await api
         .reopenForumTopic(cfg.chatId, existing.thread_id)
-        .catch((err) => console.warn(`[telegramify] reopening ${existing.thread_id} failed:`, String(err)));
+        .catch((err) => { throw new Error(`couldn't reopen Telegram fork topic: ${String(err)}`); });
       setStatus(existing.thread_id, "active");
     }
-    console.log(`Already in Telegram: «${existing.title}»\n${topicLink(existing.thread_id)}`);
+    console.log(`${args.dryRun ? "Would reuse" : "Already in"} Telegram (fork): «${existing.title}»\n` +
+      `source session: ${existing.source_session_id}\nfork session: ${existing.session_id}\n` + topicLink(existing.thread_id));
     return;
   }
 
@@ -141,40 +153,67 @@ export async function adoptCodex(argv: string[]): Promise<void> {
   const carried = lastReply(thread);
   if (args.dryRun) {
     console.log(
-      `Would create «${title}»\nsession: ${thread.id}\ncwd: ${cwd}\n` +
+      `Would create a persistent Codex fork in Telegram: «${title}»\nsource session: ${thread.id}\ncwd: ${cwd}\n` +
         `last reply: ${carried ? `${carried.length} chars — ${carried.split("\n")[0]}` : "none to carry"}`,
     );
     return;
   }
 
+  // Native fork reads the stored history without resuming the source or taking
+  // its writer lock. The terminal and its daemon can keep the original open.
+  const fork = await deps.request<{ thread: { id: string } }>("thread/fork", {
+    threadId: thread.id,
+    cwd,
+    ephemeral: false,
+    excludeTurns: true,
+  });
+  if (!fork.thread.id || fork.thread.id === thread.id) {
+    throw new Error("Codex did not return a new persistent fork; no Telegram topic was created");
+  }
+  // Confirm the fork survived its creating server before publishing a topic.
+  await readThread(fork.thread.id, deps.request);
   const topic = await api.createForumTopic(cfg.chatId, title);
   const threadId = topic.message_thread_id;
-  createTopic({
-    threadId,
-    cwd,
-    title,
-    provider: "codex",
-    sessionId: thread.id,
-  });
+  try {
+    createTopic({
+      threadId, cwd, title, provider: "codex",
+      sessionId: fork.thread.id,
+      sourceSessionId: thread.id,
+    });
+  } catch (err) {
+    // A concurrent invocation may have finished first. Remove only our unused
+    // Telegram topic; native forks and the source transcript are never deleted.
+    await api.deleteForumTopic(cfg.chatId, threadId)
+      .catch((cleanupErr) => console.warn("[telegramify] unused topic cleanup failed:", String(cleanupErr)));
+    const winner = findBySourceSession(thread.id, "codex");
+    if (!winner) throw err;
+    console.log(`Already in Telegram (fork): «${winner.title}»\n` +
+      `source session: ${thread.id}\nfork session: ${winner.session_id}\n${topicLink(winner.thread_id)}`);
+    return;
+  }
 
   const intro =
-    `📲 Codex session adopted from the terminal.\n\n` +
+    `📲 This is a persistent Codex fork of the terminal session.\n\n` +
     `cwd: ${cwd}\n` +
-    `session: ${thread.id}\n\n` +
-    `Write here to continue it. Keep talking to the same session in the terminal ` +
-    `as well and the two will fight over the transcript — pick one.`;
+    `source session: ${thread.id}\n` +
+    `fork session: ${fork.thread.id}\n\n` +
+    `Write here to continue from the saved history at the time of the fork. ` +
+    `The original session remains in the terminal; later messages are independent. ` +
+    `An unfinished terminal turn may be only partially included. ` +
+    `Both sessions use the same project files; avoid simultaneous edits.`;
   await api
     .sendMessage(cfg.chatId, intro, { message_thread_id: threadId })
     .catch((err) => console.warn("[telegramify] intro message failed:", String(err)));
 
   if (carried) {
-    await new TopicRenderer(api, cfg.chatId, threadId).sendText(
+    await new TopicRenderer(api as Api, cfg.chatId, threadId).sendText(
       `↩️ Where the terminal left off:\n\n${carried}`,
     );
   }
 
   console.log(
-    `Moved to Telegram: «${isPendingTitle(title) ? title.slice(2) : title}»\n` +
+    `Created a persistent Codex fork in Telegram: «${isPendingTitle(title) ? title.slice(2) : title}»\n` +
+      `source session: ${thread.id}\nfork session: ${fork.thread.id}\n` +
       topicLink(threadId),
   );
 }

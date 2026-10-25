@@ -75,10 +75,12 @@ npm run codexify -- --dry-run    # backwards-compatible Codex alias
   exactly that reason. And a `callback_query:data` handler that doesn't own the
   callback must pass it on with `next()`, or the handler registered after it
   never sees anything.
-- **Adoption binds, it doesn't copy.** `telegramify` only writes a topic row
-  pointing at a session id that already exists on disk — never replay or import
-  a transcript. One session id belongs to at most one topic, or the terminal and
-  the bot resume from the same file and clobber each other's tail. It also
+- **Use native session handoff.** Claude `telegramify` binds the existing session.
+  Codex `telegramify` creates a persistent native `thread/fork` by default and
+  binds the new id, preserving the source id for idempotent repeat calls. Report
+  explicitly that Telegram uses a fork and the original remains separate. Never
+  manually copy, replay, or import a transcript. One session id belongs to at most
+  one topic. The original Codex session is never resumed just to fork it. It also
   refuses to run unless `heartbeat.ts` says the bot is up: a topic nobody polls
   looks adopted and answers nothing.
 - **Never delete an agent session.** Cleanup deletes Telegram topics and their

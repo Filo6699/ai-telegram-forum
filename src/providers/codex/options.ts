@@ -33,8 +33,9 @@ const appServerConfig = (opts: {
   cwd: string;
   effort: Effort;
   serviceTier: ServiceTier;
+  sourceSessionId?: string | null;
 }) => ({
-  developer_instructions: TG_SYSTEM_PROMPT,
+  developer_instructions: codexTelegramInstructions(opts.sourceSessionId),
   ...(opts.effort ? { model_reasoning_effort: opts.effort } : {}),
   ...(opts.serviceTier ? { service_tier: opts.serviceTier } : {}),
   mcp_servers: {
@@ -56,6 +57,14 @@ const appServerConfig = (opts: {
   },
 });
 
+function codexTelegramInstructions(sourceSessionId?: string | null): string {
+  if (!sourceSessionId) return TG_SYSTEM_PROMPT;
+  return `${TG_SYSTEM_PROMPT}\n\nThis Telegram session is a persistent native Codex fork of terminal session ${sourceSessionId}.
+The inherited history is a snapshot; the original terminal session and this fork now have independent conversations but share the same project files.
+The telegramify handoff in inherited history has already been completed. Do not repeat it or create another fork unless the user explicitly asks again in a new message here.
+In your first reply in this Telegram fork, briefly tell the user in their language that this is a fork and the original session remains in the terminal. Do not repeat this notice in subsequent replies.`;
+}
+
 /** Settings shared by app-server thread/start and thread/resume. */
 export function codexAppThreadParams(opts: {
   threadId: number;
@@ -63,6 +72,7 @@ export function codexAppThreadParams(opts: {
   effort: Effort;
   model: Model;
   serviceTier: ServiceTier;
+  sourceSessionId?: string | null;
 }): Record<string, unknown> {
   return {
     model: opts.model ?? cfg.codexModel,
@@ -70,7 +80,7 @@ export function codexAppThreadParams(opts: {
     cwd: opts.cwd,
     approvalPolicy: "never",
     sandbox: cfg.permission === "bypass" ? "danger-full-access" : "workspace-write",
-    developerInstructions: TG_SYSTEM_PROMPT,
+    developerInstructions: codexTelegramInstructions(opts.sourceSessionId),
     config: appServerConfig(opts),
     threadSource: "cli",
   };

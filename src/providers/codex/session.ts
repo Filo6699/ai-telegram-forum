@@ -4,7 +4,7 @@ import { AppServerError, CodexAppServerClient, type AppServerNotification } from
 import { CodexQuestions } from "./questions.ts";
 import { TelegramQuestions } from "../../telegram/questions.ts";
 import { cfg } from "../../config/env.ts";
-import { recordCodexTurnTier } from "../../storage/db.ts";
+import { getTopic, recordCodexTurnTier } from "../../storage/db.ts";
 import { PENDING_TITLE_MARK } from "../../sessions/cwd.ts";
 import { TG_ATTACHMENT_FAILURE_GUIDANCE, tgSendDelivered, type TgSendArgs } from "../../telegram/tg-tools.ts";
 import type { AgentInput, AgentSession, AgentSessionOptions, AgentSettings, AgentSideResult, AgentTurnResult } from "../../sessions/types.ts";
@@ -154,6 +154,7 @@ export class CodexAgentSession implements AgentSession {
         effort: this.settings.effort,
         model: this.settings.model,
         serviceTier: this.settings.serviceTier,
+        sourceSessionId: getTopic(this.opts.threadId)?.source_session_id,
       });
       const result = this.settings.sessionId
         ? await this.server.request<{ thread: { id: string } }>("thread/resume", {

@@ -1,7 +1,8 @@
 # Architecture
 
 The broker has two entry paths: Telegram updates start or resume a topic session;
-the adoption CLI binds an existing native session to a topic. Both use the same
+the adoption CLI binds a native session to a topic (Claude's original or a new
+persistent Codex fork). Both use the same
 configuration and topic database. Public npm commands remain the entry points
 for running, watching, installing integrations, and adopting sessions.
 
@@ -39,8 +40,12 @@ cli/telegramify.ts → storage/db.ts + app/heartbeat.ts + Telegram API
   with its provider because it is part of that provider's session protocol.
   Native question bindings are broker state in SQLite; RPC resolvers stay in
   memory and never survive their originating app-server connection.
-- `cli/` owns adoption and integration installation. Adoption points to an
-  existing session; it never copies or rewrites its transcript.
+- `cli/` owns adoption and integration installation. Claude adoption points to an
+  existing session. Codex adoption uses native `thread/fork` and stores both the
+  fork ID and source ID; repeated handoffs reuse the topic. Short-lived native
+  requests wait for their server to exit before returning, releasing the fork's
+  writer lock before the topic can resume it. No adapter manually copies or
+  rewrites transcripts.
 - `shared/` contains small pure helpers that have no application dependencies.
 
 ## Dependency boundaries

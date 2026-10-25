@@ -41,6 +41,10 @@ test("integration installer targets this checkout when invoked from another proj
       assert.ok(command.includes(`npm --prefix ${repo.replace(/\/$/, "")} run`));
       assert.ok(command.includes("telegramify -- --provider"));
     }
+    const codexSkill = readFileSync(join(project, ".agents/skills/telegramify/SKILL.md"), "utf8");
+    assert.match(codexSkill, /Always explicitly say this is a fork/);
+    assert.match(codexSkill, /original terminal session remains separate/);
+    assert.ok(!codexSkill.includes("--fork"));
   } finally {
     rmSync(project, { recursive: true, force: true });
   }

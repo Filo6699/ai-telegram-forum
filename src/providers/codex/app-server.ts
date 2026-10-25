@@ -14,15 +14,21 @@ export function codexRequest<T>(method: string, params?: unknown): Promise<T> {
     const lines = createInterface({ input: child.stdout });
     let stderr = "";
     let settled = false;
+    let outcome: { error?: unknown; value?: T } | undefined;
+    let closingTimer: ReturnType<typeof setTimeout> | undefined;
 
     const finish = (error?: unknown, value?: T) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       lines.close();
+      outcome = { error, value };
       child.kill();
-      if (error) reject(error);
-      else resolve(value as T);
+      // A fork owns its writer lock until this process exits. Do not hand its
+      // id to the broker while the short-lived server can still be writing.
+      closingTimer = setTimeout(() => reject(
+        error ?? new Error("Codex app-server did not exit; its writer lock may still be held"),
+      ), 5_000);
     };
     const timer = setTimeout(
       () => finish(new Error(`Codex app-server timed out after ${ASK_TIMEOUT_MS}ms`)),
@@ -33,6 +39,11 @@ export function codexRequest<T>(method: string, params?: unknown): Promise<T> {
       stderr = (stderr + String(chunk)).slice(-4000);
     });
     child.on("error", finish);
+    child.on("close", () => {
+      clearTimeout(closingTimer);
+      if (outcome?.error) reject(outcome.error);
+      else if (outcome) resolve(outcome.value as T);
+    });
     child.on("exit", (code) => {
       if (!settled) {
         finish(new Error(`Codex app-server exited ${code ?? "without a code"}: ${stderr.trim()}`));

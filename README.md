@@ -249,10 +249,25 @@ Claude Code: /telegramify
 Codex:       $telegramify
 ```
 
-It returns a topic link. Continue there with the same session and history.
-Don't use the same session in the terminal and Telegram at the same time: both
-write to the same transcript. Calling the integration again returns the existing
-topic.
+It returns a topic link. For **Codex**, Telegram continues in a **persistent native
+fork** with its own session ID and a snapshot of the original's saved history.
+This is the default; no extra flag is needed. The agent explicitly reports that
+it is a fork. The original remains available in the terminal, and a background
+Codex server holding it open does not block the fork. Later messages in the two
+sessions are independent. Both use the same project files, so avoid simultaneous
+edits. An unfinished terminal turn may be only partially included in the snapshot.
+
+Calling the integration again for either the original or its Telegram fork
+returns the existing fork topic, including after a bot restart. Older Codex topics
+that directly adopted the original keep their binding; calling `telegramify` for
+that original now creates a new fork topic. Native sessions are never deleted.
+
+For **Claude Code**, the topic continues the same session. Don't use that session
+in the terminal and Telegram at the same time: both write to the same transcript.
+Calling the integration again returns the existing topic.
+
+After updating an existing installation, run `npm run install-command` again to
+refresh the agent's instructions, and restart the bot to load the updated code.
 
 You can also select a session from the shell:
 

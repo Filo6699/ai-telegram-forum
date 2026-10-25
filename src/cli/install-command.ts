@@ -30,7 +30,7 @@ error) verbatim. Don't do anything else.
 
 const codexBody = `---
 name: telegramify
-description: Move the current Codex session to Telegram and continue it from a forum topic. Use when the user asks to telegramify, adopt, move, or continue this session in Telegram.
+description: Continue the current Codex session in Telegram through a persistent native fork. Use when the user asks to telegramify, adopt, move, or continue this session in Telegram.
 ---
 
 Run this command with the shell:
@@ -39,9 +39,12 @@ Run this command with the shell:
 npm --prefix ${repo} run --silent telegramify -- --provider codex --session "$CODEX_THREAD_ID" --cwd "$PWD"
 \`\`\`
 
-The output comes from the ai-telegram-forum broker. Report in one line whether
-the session moved to Telegram, and pass on the topic link or error verbatim. Do
-nothing else.
+The output comes from the ai-telegram-forum broker. Report in the user's language
+that Telegram continues in a persistent fork with inherited history and that the
+original terminal session remains separate. Always explicitly say this is a fork,
+including when reusing an existing topic. Pass on the topic link or error verbatim.
+If the command failed or only printed a dry run, report that outcome without
+claiming a fork was created. Do nothing else.
 `;
 
 const project = process.argv.includes("--project");

@@ -1,12 +1,13 @@
 /**
- * Adopt an existing Claude Code or Codex session into the forum.
+ * Continue a Claude Code or Codex session in the forum.
  *
- * A session started in the terminal already lives on disk; all this bot needs
+ * Claude's session started in the terminal already lives on disk; all this bot needs
  * to keep talking to it is a topic bound to its id. So `/telegramify` doesn't
  * copy or replay anything into the session — it creates the topic, writes the
  * row, and the next message you send there resumes that very session. The one
  * thing it does carry over is the agent's last reply, posted into the fresh
  * topic so the conversation doesn't restart against a blank wall.
+ * Codex uses a persistent native fork instead; see codexify.ts.
  *
  *   npm run telegramify -- --session <uuid> [--cwd <dir>] [--title <text>]
  *
