@@ -1,8 +1,12 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { cfg } from "../../config/env.ts";
 import type { LimitWindow, PlanLimits } from "../../sessions/limits.ts";
+import { recordClaudeWeeklySample } from "./weekly.ts";
 
 const ASK_TIMEOUT_MS = 60_000;
+/** Turn-end readings feed the weekly calibration; more often adds nothing. */
+const SAMPLE_INTERVAL_MS = 3 * 60_000;
+let lastSample = 0;
 
 /**
  * The plan's own 5-hour and weekly limits — the numbers `/usage` shows in the
@@ -36,6 +40,20 @@ export async function fetchPlanLimits(live: Asker | null = null): Promise<PlanLi
   }
 }
 
+/**
+ * Read the plan limits over a live session's control channel, at most every
+ * few minutes, only to feed the weekly calibration. Never starts a process.
+ */
+export async function sampleClaudeWeekly(live: Asker | null): Promise<void> {
+  if (!live || Date.now() - lastSample < SAMPLE_INTERVAL_MS) return;
+  lastSample = Date.now();
+  try {
+    await read(live);
+  } catch (err) {
+    console.warn("[weekly] sampling Claude limits failed:", String(err));
+  }
+}
+
 type Asker = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(): Promise<any> };
 
 async function read(q: Asker): Promise<PlanLimits | null> {
@@ -47,6 +65,14 @@ async function read(q: Asker): Promise<PlanLimits | null> {
   if (!usage?.rate_limits_available || !usage.rate_limits) return null;
 
   const r = usage.rate_limits;
+  const plan = usage.subscription_type ?? null;
+  try {
+    if (r.seven_day?.utilization != null) {
+      recordClaudeWeeklySample(r.seven_day.utilization, r.seven_day.resets_at, plan);
+    }
+  } catch (err) {
+    console.warn("[weekly] recording a Claude sample failed:", String(err));
+  }
   const windows: LimitWindow[] = [];
   const add = (label: string, w: any) => {
     if (w && (w.utilization !== null || w.resets_at)) {
@@ -59,7 +85,7 @@ async function read(q: Asker): Promise<PlanLimits | null> {
   add("Week (Sonnet)", r.seven_day_sonnet);
   for (const m of r.model_scoped ?? []) add(`Week (${m.display_name})`, m);
 
-  return { subscription: usage.subscription_type ?? null, windows };
+  return { subscription: plan, windows };
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {

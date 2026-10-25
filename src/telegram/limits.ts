@@ -1,4 +1,5 @@
 import type { PlanLimits } from "../sessions/limits.ts";
+import type { WeeklyCalibration } from "../providers/claude/weekly.ts";
 import { bar, humanUntil } from "../shared/fmt.ts";
 
 /**
@@ -17,4 +18,10 @@ export function planLimitsText(limits: PlanLimits | null, provider = "Claude"): 
   });
   const plan = limits.subscription ? ` (${limits.subscription})` : "";
   return [`⏳ *${provider} plan${plan}*`, "```", ...rows, "```"].join("\n");
+}
+
+/** How the per-topic `🧠 ≈%` figures for Claude are being derived. */
+export function claudeCalibrationText(c: WeeklyCalibration | null): string {
+  if (!c) return "_🧠 weekly estimate: calibrating, needs the weekly % to rise by 10 points_";
+  return `_🧠 weekly estimate: ≈$${c.usdPerPercent.toFixed(2)} API-equivalent per 1% (${c.spans} spans, ${c.points} points)_`;
 }

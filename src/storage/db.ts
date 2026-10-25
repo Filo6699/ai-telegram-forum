@@ -90,6 +90,14 @@ db.exec(`
     state TEXT NOT NULL DEFAULT 'open',
     PRIMARY KEY (chat_id, thread_id, message_id)
   );
+  CREATE TABLE IF NOT EXISTS claude_weekly_samples (
+    at          INTEGER NOT NULL,
+    resets_at   INTEGER NOT NULL,
+    utilization REAL    NOT NULL,
+    local_usd   REAL    NOT NULL,
+    plan        TEXT
+  );
+  CREATE INDEX IF NOT EXISTS claude_weekly_samples_at ON claude_weekly_samples (at);
   CREATE INDEX IF NOT EXISTS question_prompts_item
     ON question_prompts (chat_id, thread_id, session_id, turn_id, item_id);
 `);
@@ -366,6 +374,36 @@ export function setQuestionPromptState(p: QuestionPrompt, state: QuestionPrompt[
   db.prepare(`UPDATE question_prompts SET state = ?
     WHERE chat_id = ? AND thread_id = ? AND session_id = ? AND turn_id = ? AND item_id = ? AND question_id = ?`)
     .run(state, p.chat_id, p.thread_id, p.session_id, p.turn_id, p.item_id, p.question_id);
+}
+
+export interface ClaudeWeeklySample {
+  at: number;
+  resets_at: number;
+  /** Anthropic's account-wide weekly percent, as reported (whole numbers). */
+  utilization: number;
+  /** API-equivalent USD in local transcripts from the window start to `at`. */
+  local_usd: number;
+  plan: string | null;
+}
+
+export function addClaudeWeeklySample(s: ClaudeWeeklySample): void {
+  db.prepare(
+    "INSERT INTO claude_weekly_samples (at, resets_at, utilization, local_usd, plan) VALUES (?, ?, ?, ?, ?)",
+  ).run(s.at, s.resets_at, s.utilization, s.local_usd, s.plan);
+}
+
+export function claudeWeeklySamples(since: number): ClaudeWeeklySample[] {
+  return db.prepare("SELECT * FROM claude_weekly_samples WHERE at >= ? ORDER BY at")
+    .all(since) as unknown as ClaudeWeeklySample[];
+}
+
+export function getSetting(key: string): string | null {
+  const row = stmts.getSetting.get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function setSetting(key: string, value: string): void {
+  stmts.setSetting.run(key, value);
 }
 
 export function addUsage(threadId: number, u: Usage): void {

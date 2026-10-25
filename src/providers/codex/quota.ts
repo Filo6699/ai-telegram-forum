@@ -72,8 +72,4 @@ export function estimateCodexCredits(
 export const estimateCodexWeeklyPercent = (credits: number): number =>
   (Math.max(0, credits) / WEEKLY_CREDITS_ESTIMATE) * 100;
 
-export function formatCodexWeeklyPercent(percent: number): string {
-  if (percent > 0 && percent < 0.1) return `${percent.toFixed(2)}%`;
-  if (percent < 10) return `${percent.toFixed(1)}%`;
-  return `${Math.round(percent)}%`;
-}
+export { formatWeeklyPercent as formatCodexWeeklyPercent } from "../../shared/fmt.ts";

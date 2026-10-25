@@ -42,3 +42,10 @@ export function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
+
+/** A share of a weekly allowance, with more digits the smaller it gets. */
+export function formatWeeklyPercent(percent: number): string {
+  if (percent > 0 && percent < 0.1) return `${percent.toFixed(2)}%`;
+  if (percent < 10) return `${percent.toFixed(1)}%`;
+  return `${Math.round(percent)}%`;
+}

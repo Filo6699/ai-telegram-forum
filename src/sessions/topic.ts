@@ -10,6 +10,12 @@ import {
   codexWeeklyPart,
   codexWeeklyPercent,
 } from "../providers/codex/summary.ts";
+import { sampleClaudeWeekly } from "../providers/claude/limits.ts";
+import {
+  claudeSessionUsd,
+  claudeWeeklyCalibration,
+  claudeWeeklyPart,
+} from "../providers/claude/weekly.ts";
 import { isPendingTitle } from "./cwd.ts";
 import {
   addUsage,
@@ -68,6 +74,9 @@ export class TopicSession {
   private turnResolvedModel: string | null = null;
   private turnServiceTier: ServiceTier = null;
   private turnWeeklyBaseline: number | null = null;
+  /** Claude: session dollars before the turn, and the $/1% ratio frozen for it. */
+  private turnClaudeBaselineUsd: number | null = null;
+  private turnClaudeUsdPerPercent: number | null = null;
   private sideTurns = 0;
   private closed = false;
 
@@ -344,6 +353,12 @@ export class TopicSession {
     this.turnResolvedModel = null;
     this.turnServiceTier = this.serviceTier;
     this.turnWeeklyBaseline = null;
+    this.turnClaudeBaselineUsd = null;
+    this.turnClaudeUsdPerPercent = null;
+    if (this.provider === "claude") {
+      this.turnClaudeUsdPerPercent = claudeWeeklyCalibration()?.usdPerPercent ?? null;
+      this.turnClaudeBaselineUsd = this.sessionId ? claudeSessionUsd(this.sessionId) : 0;
+    }
     this.out.clear();
     this.status = new TurnStatus(this.out, this.statusDetail());
     await this.status.start();
@@ -393,7 +408,9 @@ export class TopicSession {
     const extra =
       this.provider === "codex"
         ? await codexSummaryParts(this.sessionId, this.turnWeeklyBaseline, this.turnServiceTier)
-        : [];
+        : this.provider === "claude"
+          ? [this.claudeWeeklyPart()].filter((p): p is string => p !== null)
+          : [];
     await status?.finish(
       summarize(
         result.ok && !result.failure,
@@ -408,6 +425,7 @@ export class TopicSession {
         preset,
       ),
     );
+    if (this.provider === "claude") void sampleClaudeWeekly(this.live);
     await this.retitle();
     if (!this.closed) {
       this.armIdleTimer();
@@ -419,10 +437,19 @@ export class TopicSession {
     if (this.provider === "codex") {
       return () => codexWeeklyPart(this.sessionId, this.turnWeeklyBaseline, this.turnServiceTier);
     }
+    if (this.provider === "claude") return async () => this.claudeWeeklyPart();
     if (this.provider === "openrouter") {
       return async () => (this.turnResolvedModel ? `🤖 ${this.turnResolvedModel}` : null);
     }
     return undefined;
+  }
+
+  private claudeWeeklyPart(): string | null {
+    return claudeWeeklyPart(
+      claudeSessionUsd(this.sessionId),
+      this.turnClaudeBaselineUsd,
+      this.turnClaudeUsdPerPercent,
+    );
   }
 
   /** Replace the provisional topic title once the provider can settle it. */
