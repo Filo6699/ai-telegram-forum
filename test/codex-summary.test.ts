@@ -227,8 +227,8 @@ test("an explicit native null tier stays standard even with a fast topic fallbac
 });
 
 test("Codex weekly summary shows this turn before the cumulative session", async () => {
-  assert.equal(formatCodexWeeklyPart(2.2, 1.8), "🧠 ≈0.4% | ≈2.2%");
-  assert.equal(formatCodexWeeklyPart(2.2), "🧠 ≈2.2%");
+  assert.equal(formatCodexWeeklyPart(2.2, 1.8), "🧠 0.4% | 2.2%");
+  assert.equal(formatCodexWeeklyPart(2.2), "🧠 2.2%");
 });
 
 test("the no-preset Codex launch picker exposes standard and fast modes", () => {

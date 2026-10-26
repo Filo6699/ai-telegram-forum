@@ -23,10 +23,10 @@ export function planLimitsText(limits: PlanLimits | null, provider = "Claude"): 
 /** How the per-topic `🧠` figures for Claude are being derived. */
 export function claudeCalibrationText(c: WeeklyCalibration | null, ratio: WeeklyRatio | null): string {
   if (c && ratio) {
-    return `_🧠 weekly estimate: ≈$${ratio.usdPerPercent.toFixed(2)} API-equivalent per 1% (${c.spans} spans, ${c.points} points)_`;
+    return `_🧠 weekly estimate: $${ratio.usdPerPercent.toFixed(2)} API-equivalent per 1% (${c.spans} spans, ${c.points} points)_`;
   }
   if (ratio) {
-    return `_🧠 weekly estimate: calibrating; 1% costs at least $${ratio.usdPerPercent.toFixed(2)}, so ≤ figures are upper bounds_`;
+    return `_🧠 weekly estimate: calibrating; 1% costs at least $${ratio.usdPerPercent.toFixed(2)}, so 🧠 figures read high_`;
   }
   return "_🧠 weekly estimate: no readings yet_";
 }

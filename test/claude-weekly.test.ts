@@ -103,9 +103,9 @@ test("no estimate until calibrated, and none carried across a plan change", () =
   assert.equal(calibrate([], "max", prev), null);
   assert.equal(claudeWeeklyPart(5, 0, null), null);
   const cal = { usdPerPercent: 10, calibrated: true };
-  assert.equal(claudeWeeklyPart(5, 4, cal), "🧠 ≈0.1% | ≈0.5%");
-  assert.equal(claudeWeeklyPart(5, null, cal), "🧠 ≈0.5%");
-  assert.equal(claudeWeeklyPart(5, 4, { usdPerPercent: 10, calibrated: false }), "🧠 ≤0.1% | ≤0.5%");
+  assert.equal(claudeWeeklyPart(5, 4, cal), "🧠 0.1% | 0.5%");
+  assert.equal(claudeWeeklyPart(5, null, cal), "🧠 0.5%");
+  assert.equal(claudeWeeklyPart(5, 4, { usdPerPercent: 10, calibrated: false }), "🧠 0.1% | 0.5%");
 });
 
 test("the floor holds whatever other devices spent, and only grows", () => {

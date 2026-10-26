@@ -194,15 +194,15 @@ remain commands.
   Ephemeral Codex `/btw` forks have no persisted rollout and are excluded from
   the native log totals.
   Plan limits come directly from the account and include usage outside Telegram.
-  The `≈` allowance percentages in Codex turn summaries use an estimated weekly
+  The `🧠` allowance percentages in Codex turn summaries use an estimated weekly
   capacity of 8,500 credits, not an official conversion for every plan. Credit
   rates alone do not determine included subscription usage. The summary shows
   this turn, then the full session history, which can span several reset windows.
-  Claude turn summaries show the same `🧠 ≈turn | ≈session` pair. The bot prices
+  Claude turn summaries show the same `🧠 turn | session` pair. The bot prices
   each response in local transcripts at API rates and learns how many dollars
   make up 1% of the week by comparing that spend with the account's reported
   weekly percent. Until the weekly percent has risen 10 points under
-  observation it shows `≤` upper bounds, which only ever come down; `/usage`
+  observation the figures are upper bounds, which only ever come down; `/usage`
   shows the current ratio. Usage on claude.ai or
   other machines can only make the estimate read high, never low.
 - `/resume` — get the command to continue a Claude or Codex session in a terminal.

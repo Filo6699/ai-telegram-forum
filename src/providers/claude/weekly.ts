@@ -204,9 +204,9 @@ export function claudeSessionUsd(sessionId: string | null): number | null {
 }
 
 /**
- * `🧠 ≈turn | ≈session` against the calibrated week, or `≤` while only the
- * floor is known. The ratio is taken once per turn by the caller, so one
- * turn's numbers never move under it.
+ * `🧠 turn | session` against the week. Before calibration the ratio is the
+ * floor, so the figures read high. The ratio is taken once per turn by the
+ * caller, so one turn's numbers never move under it.
  */
 export function claudeWeeklyPart(
   sessionUsd: number | null,
@@ -214,9 +214,8 @@ export function claudeWeeklyPart(
   ratio: WeeklyRatio | null,
 ): string | null {
   if (sessionUsd === null || !ratio) return null;
-  const mark = ratio.calibrated ? "≈" : "≤";
   const session = formatWeeklyPercent(sessionUsd / ratio.usdPerPercent);
-  if (turnBaselineUsd === null) return `🧠 ${mark}${session}`;
+  if (turnBaselineUsd === null) return `🧠 ${session}`;
   const turn = formatWeeklyPercent(Math.max(0, sessionUsd - turnBaselineUsd) / ratio.usdPerPercent);
-  return `🧠 ${mark}${turn} | ${mark}${session}`;
+  return `🧠 ${turn} | ${session}`;
 }

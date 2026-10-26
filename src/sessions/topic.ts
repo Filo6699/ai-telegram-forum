@@ -287,7 +287,7 @@ export class TopicSession {
         result.stopped,
         [],
         this.provider,
-        this.provider === "codex" ? preset : null,
+        this.provider === "openrouter" ? null : preset,
       );
       const answer = [result.answer, result.failure].filter(Boolean).join("\n\n");
       await status.finishWithAnswer(answer, summary);
@@ -386,7 +386,7 @@ export class TopicSession {
       this.provider,
     );
     const preset =
-      this.provider === "codex"
+      this.provider !== "openrouter"
         ? presetName(this.provider, {
             model: this.turnModel,
             effort: this.turnEffort,
@@ -491,14 +491,16 @@ function summarize(
         ]
       : provider === "openrouter"
         ? [`${marker} ${humanMs(status?.elapsedMs ?? 0)}`, `🤖 ${model}`]
-      : [marker, humanMs(status?.elapsedMs ?? 0), `🤖 ${model}`, `⚙️ ${effort}`];
+      : preset
+        ? [marker, humanMs(status?.elapsedMs ?? 0), preset]
+        : [marker, humanMs(status?.elapsedMs ?? 0), `🤖 ${model}`, `⚙️ ${effort}`];
   if (provider !== "codex" && serviceTier === "fast") {
     parts.push(`🚀 ${serviceTierLabel(serviceTier)}`);
   }
   if (status && status.toolCalls > 0) {
     parts.push(`🔧 ${status.toolCalls}`);
   }
-  if (provider !== "codex" && (usage.inTokens || usage.outTokens)) {
+  if (provider === "openrouter" && (usage.inTokens || usage.outTokens)) {
     parts.push(`${fmtTokens(usage.inTokens)}↑ ${fmtTokens(usage.outTokens)}↓`);
   }
   if (provider !== "codex" && usage.costUsd !== null && usage.costUsd > 0) {
