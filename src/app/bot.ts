@@ -52,7 +52,7 @@ import {
 import { fmtTokens } from "../shared/fmt.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { fetchPlanLimits } from "../providers/claude/limits.ts";
-import { claudeWeeklyCalibration } from "../providers/claude/weekly.ts";
+import { claudeWeeklyCalibration, claudeWeeklyRatio } from "../providers/claude/weekly.ts";
 import { claudeCalibrationText, planLimitsText } from "../telegram/limits.ts";
 import { MediaGroupCollector } from "../telegram/media-group.ts";
 import { registerPermissionButtons } from "../telegram/permission.ts";
@@ -654,7 +654,7 @@ async function handleCommand(
     const limits =
       provider === "codex" ? await fetchCodexPlanLimits() : await fetchPlanLimits(anyLiveQuery());
     plan = planLimitsText(limits, providerLabel(provider));
-    if (provider === "claude" && limits) plan += `\n${claudeCalibrationText(claudeWeeklyCalibration())}`;
+    if (provider === "claude" && limits) plan += `\n${claudeCalibrationText(claudeWeeklyCalibration(), claudeWeeklyRatio())}`;
   } catch (err) {
     console.warn("[usage] plan limits failed:", String(err));
     plan = "_plan limits unavailable_";

@@ -13,7 +13,8 @@ import {
 import { sampleClaudeWeekly } from "../providers/claude/limits.ts";
 import {
   claudeSessionUsd,
-  claudeWeeklyCalibration,
+  claudeWeeklyRatio,
+  type WeeklyRatio,
   claudeWeeklyPart,
 } from "../providers/claude/weekly.ts";
 import { isPendingTitle } from "./cwd.ts";
@@ -76,7 +77,7 @@ export class TopicSession {
   private turnWeeklyBaseline: number | null = null;
   /** Claude: session dollars before the turn, and the $/1% ratio frozen for it. */
   private turnClaudeBaselineUsd: number | null = null;
-  private turnClaudeUsdPerPercent: number | null = null;
+  private turnClaudeRatio: WeeklyRatio | null = null;
   private sideTurns = 0;
   private closed = false;
 
@@ -354,9 +355,9 @@ export class TopicSession {
     this.turnServiceTier = this.serviceTier;
     this.turnWeeklyBaseline = null;
     this.turnClaudeBaselineUsd = null;
-    this.turnClaudeUsdPerPercent = null;
+    this.turnClaudeRatio = null;
     if (this.provider === "claude") {
-      this.turnClaudeUsdPerPercent = claudeWeeklyCalibration()?.usdPerPercent ?? null;
+      this.turnClaudeRatio = claudeWeeklyRatio();
       this.turnClaudeBaselineUsd = this.sessionId ? claudeSessionUsd(this.sessionId) : 0;
     }
     this.out.clear();
@@ -448,7 +449,7 @@ export class TopicSession {
     return claudeWeeklyPart(
       claudeSessionUsd(this.sessionId),
       this.turnClaudeBaselineUsd,
-      this.turnClaudeUsdPerPercent,
+      this.turnClaudeRatio,
     );
   }
 

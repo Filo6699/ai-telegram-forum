@@ -22,7 +22,7 @@ import { formatWeeklyPercent } from "../../shared/fmt.ts";
  * - Usage the bot cannot see (claude.ai, another machine) only ever makes a
  *   span's ratio too low, so the estimate takes an upper quantile of spans.
  * - The stored ratio moves at most ×MAX_STEP per newly closed span.
- * - Until calibrated there is no estimate at all, rather than a guess.
+ * - Until calibrated, it shows an upper bound instead (see `lowerBound`).
  */
 
 const WEEK_MS = 7 * 24 * 3600_000;
@@ -32,6 +32,8 @@ const HISTORY_SPANS = 12;
 const QUANTILE = 0.75;
 const MAX_STEP = 1.25;
 const LOOKBACK_MS = 8 * WEEK_MS;
+/** Old enough to survive a weekly reset, recent enough to follow a plan change. */
+const BOUND_LOOKBACK_MS = 2 * WEEK_MS;
 const SETTING = "claude_weekly_calibration";
 
 export interface WeeklySpan {
@@ -112,6 +114,38 @@ export function calibrate(
   return { usdPerPercent, plan, lastSpanEnd: last, points, spans: recent.length };
 }
 
+/**
+ * The endpoint rounds to the nearest whole percent, so a reading of u means
+ * the true share is below u + 0.5. Local dollars can only be part of that
+ * share, so 1% costs at least S / (u + 0.5), whatever other devices spent.
+ * Each sample is a hard floor; the largest one wins and only ever grows, so
+ * percentages derived from it only ever come down.
+ */
+export function lowerBound(samples: ClaudeWeeklySample[], plan: string | null): number | null {
+  let best = 0;
+  for (const s of samples) {
+    if (s.plan !== plan || s.local_usd <= 0) continue;
+    best = Math.max(best, s.local_usd / (s.utilization + 0.5));
+  }
+  return best > 0 ? best : null;
+}
+
+export interface WeeklyRatio {
+  usdPerPercent: number;
+  /** false: only the floor is known, so percentages are upper bounds. */
+  calibrated: boolean;
+}
+
+/** The dollars-per-1% figure to estimate with, or null with no data at all. */
+export function claudeWeeklyRatio(now = Date.now()): WeeklyRatio | null {
+  const cal = claudeWeeklyCalibration();
+  const samples = claudeWeeklySamples(now - BOUND_LOOKBACK_MS);
+  const plan = cal?.plan ?? samples[samples.length - 1]?.plan ?? null;
+  const floor = lowerBound(samples, plan);
+  if (cal) return { usdPerPercent: Math.max(cal.usdPerPercent, floor ?? 0), calibrated: true };
+  return floor ? { usdPerPercent: floor, calibrated: false } : null;
+}
+
 export function claudeWeeklyCalibration(): WeeklyCalibration | null {
   const raw = getSetting(SETTING);
   if (!raw) return null;
@@ -170,18 +204,19 @@ export function claudeSessionUsd(sessionId: string | null): number | null {
 }
 
 /**
- * `🧠 ≈turn | ≈session` against the calibrated week, or null while the bot is
- * still calibrating. The ratio is taken once per turn by the caller, so one
+ * `🧠 ≈turn | ≈session` against the calibrated week, or `≤` while only the
+ * floor is known. The ratio is taken once per turn by the caller, so one
  * turn's numbers never move under it.
  */
 export function claudeWeeklyPart(
   sessionUsd: number | null,
   turnBaselineUsd: number | null,
-  usdPerPercent: number | null,
+  ratio: WeeklyRatio | null,
 ): string | null {
-  if (sessionUsd === null || !usdPerPercent) return null;
-  const session = formatWeeklyPercent(sessionUsd / usdPerPercent);
-  if (turnBaselineUsd === null) return `🧠 ≈${session}`;
-  const turn = formatWeeklyPercent(Math.max(0, sessionUsd - turnBaselineUsd) / usdPerPercent);
-  return `🧠 ≈${turn} | ≈${session}`;
+  if (sessionUsd === null || !ratio) return null;
+  const mark = ratio.calibrated ? "≈" : "≤";
+  const session = formatWeeklyPercent(sessionUsd / ratio.usdPerPercent);
+  if (turnBaselineUsd === null) return `🧠 ${mark}${session}`;
+  const turn = formatWeeklyPercent(Math.max(0, sessionUsd - turnBaselineUsd) / ratio.usdPerPercent);
+  return `🧠 ${mark}${turn} | ${mark}${session}`;
 }

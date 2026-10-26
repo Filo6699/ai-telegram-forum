@@ -201,8 +201,9 @@ remain commands.
   Claude turn summaries show the same `🧠 ≈turn | ≈session` pair. The bot prices
   each response in local transcripts at API rates and learns how many dollars
   make up 1% of the week by comparing that spend with the account's reported
-  weekly percent. It shows nothing until the weekly percent has risen 10 points
-  under observation; `/usage` shows the current ratio. Usage on claude.ai or
+  weekly percent. Until the weekly percent has risen 10 points under
+  observation it shows `≤` upper bounds, which only ever come down; `/usage`
+  shows the current ratio. Usage on claude.ai or
   other machines can only make the estimate read high, never low.
 - `/resume` — get the command to continue a Claude or Codex session in a terminal.
 - `/id` — show the session ID.

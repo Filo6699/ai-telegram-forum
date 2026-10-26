@@ -6,6 +6,7 @@ import {
   buildSpans,
   calibrate,
   claudeWeeklyPart,
+  lowerBound,
   type WeeklyCalibration,
 } from "../src/providers/claude/weekly.ts";
 import type { ClaudeWeeklySample } from "../src/storage/db.ts";
@@ -101,6 +102,18 @@ test("no estimate until calibrated, and none carried across a plan change", () =
   const prev: WeeklyCalibration = { usdPerPercent: 10, plan: "pro", lastSpanEnd: 1, points: 10, spans: 1 };
   assert.equal(calibrate([], "max", prev), null);
   assert.equal(claudeWeeklyPart(5, 0, null), null);
-  assert.equal(claudeWeeklyPart(5, 4, 10), "🧠 ≈0.1% | ≈0.5%");
-  assert.equal(claudeWeeklyPart(5, null, 10), "🧠 ≈0.5%");
+  const cal = { usdPerPercent: 10, calibrated: true };
+  assert.equal(claudeWeeklyPart(5, 4, cal), "🧠 ≈0.1% | ≈0.5%");
+  assert.equal(claudeWeeklyPart(5, null, cal), "🧠 ≈0.5%");
+  assert.equal(claudeWeeklyPart(5, 4, { usdPerPercent: 10, calibrated: false }), "🧠 ≤0.1% | ≤0.5%");
+});
+
+test("the floor holds whatever other devices spent, and only grows", () => {
+  // Rounded 2% means under 2.5%: 15 local dollars give at least $6 per 1%.
+  assert.equal(lowerBound([sample(1, 2, 15)], "max"), 6);
+  // Hidden usage pushes the percent up, which only weakens a sample's floor.
+  assert.equal(lowerBound([sample(1, 2, 15), sample(2, 9, 16)], "max"), 6);
+  assert.equal(lowerBound([sample(1, 2, 15), sample(2, 3, 35)], "max"), 10);
+  assert.equal(lowerBound([sample(1, 2, 15, "pro")], "max"), null);
+  assert.equal(lowerBound([], "max"), null);
 });
