@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { progressLevels, toolcallModes, type Progress, type Toolcalls } from "../telegram/activity.ts";
 import { setActivity } from "../storage/db.ts";
 import { cfg } from "../config/env.ts";
+import { transcribe } from "../transcription/client.ts";
 import { botCommands, parseCommand, type ParsedCommand } from "../telegram/commands.ts";
 import { fetchCodexPlanLimits } from "../providers/codex/limits.ts";
 import { fetchCodexSessionUsage, type CodexSessionUsage } from "../providers/codex/session-usage.ts";
@@ -979,10 +980,22 @@ async function contentFrom(ctx: any): Promise<AgentInput | null> {
     }).catch(() => {});
     return null;
   }
-  return contentOf(
-    withNote(caption, `[${inbound.label}, ${humanSize(file.size)}]\n${file.path}`),
-    [],
-  );
+  const note = `[${inbound.label}, ${humanSize(file.size)}]\n${file.path}`;
+  if (!inbound.speech || !cfg.transcription) return contentOf(withNote(caption, note), []);
+
+  // The recording stays on disk beside its transcript, so the agent can go
+  // back to the audio. A failed transcription still delivers the file.
+  try {
+    const heard = await transcribe(cfg.transcription, file.path);
+    const said = heard ? `Transcript:\n${heard}` : "Transcript: no speech recognised.";
+    return contentOf(withNote(caption, `${note}\n${said}`), []);
+  } catch (err) {
+    console.warn(`[media] transcribing the ${inbound.kind} failed:`, String(err));
+    await replySilently(ctx, `⚠️ couldn't transcribe that ${inbound.kind}, passing the file on: ${String(err)}`, {
+      message_thread_id: thread,
+    }).catch(() => {});
+    return contentOf(withNote(caption, note), []);
+  }
 }
 
 async function routeMediaGroup(sources: any[]): Promise<void> {

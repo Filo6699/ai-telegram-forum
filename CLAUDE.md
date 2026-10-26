@@ -21,6 +21,7 @@ for dependency boundaries and where new features belong.
 | `src/telegram/` | Commands, pickers, permissions, attachments, rendering, agent send tool |
 | `src/config/` | Environment loading, provider/model/effort settings and preset parsing |
 | `src/storage/` | SQLite topic state and usage persistence |
+| `src/transcription/` | Speech-to-text client for an OpenAI-compatible transcription API |
 | `src/shared/` | Provider-independent formatting helpers |
 
 ## Commands

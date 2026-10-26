@@ -2,7 +2,7 @@ import { parseDefaultPreset, parsePresets } from "./presets.ts";
 import { normalizeOpenRouterModel } from "./openrouter-model.ts";
 import type { Settings } from "./settings.ts";
 
-/** Combine portable settings with the six machine-specific environment values. */
+/** Combine portable settings with the machine-specific environment values. */
 export function buildConfig(settings: Settings, env: Record<string, string | undefined>) {
   function req(name: string): string {
     const value = env[name];
@@ -26,6 +26,11 @@ export function buildConfig(settings: Settings, env: Record<string, string | und
   const allPresets = parsePresets(settings.PRESETS);
   const presets = allPresets.filter((preset) => preset.provider !== "openrouter" || openrouterEnabled);
   const defaultPreset = parseDefaultPreset(settings.DEFAULT_PRESET, presets, settings.PROVIDER);
+  // A self-hosted server may need no key, so only the switch decides.
+  const { enabled: transcribing, ...transcriptionSettings } = settings.TRANSCRIPTION;
+  const transcription = transcribing
+    ? { ...transcriptionSettings, apiKey: env.TRANSCRIPTION_API_KEY?.trim() ?? "" }
+    : undefined;
 
   return {
     token: req("BOT_TOKEN"),
@@ -55,6 +60,7 @@ export function buildConfig(settings: Settings, env: Record<string, string | und
     permissionTimeoutMs: settings.PERMISSION_TIMEOUT_MINUTES * 60_000,
     dbPath: env.DB_PATH ?? "./data/state.db",
     inboxPath: settings.INBOX_PATH,
+    transcription,
     pidPath: env.PID_PATH ?? "./data/bot.pid",
   };
 }

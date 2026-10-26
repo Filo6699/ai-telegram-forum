@@ -33,7 +33,7 @@ cli/telegramify.ts → storage/db.ts + app/heartbeat.ts + Telegram API
   approval buttons, native question presentation and durable reply bindings,
   collecting attachments, rendering messages and sending agent output.
   `limits.ts` formats common plan-limit data; it does not fetch it.
-- `config/` combines six local environment values with portable `config.json`
+- `config/` combines local environment values (credentials and state paths) with portable `config.json`
   settings, validates them, and describes model/effort/preset
   choices. It does not start agent processes or write topic state.
 - `storage/` owns SQLite persistence. OpenRouter transcript persistence stays
@@ -46,6 +46,10 @@ cli/telegramify.ts → storage/db.ts + app/heartbeat.ts + Telegram API
   requests wait for their server to exit before returning, releasing the fork's
   writer lock before the topic can resume it. No adapter manually copies or
   rewrites transcripts.
+- `transcription/` turns a recorded voice or video note into text through
+  OpenAI's `POST /audio/transcriptions` contract. The backend (Groq or a
+  self-hosted Whisper server) is a `config.json` URL; `app/` calls it before
+  the message reaches a provider, so providers only ever see text.
 - `shared/` contains small pure helpers that have no application dependencies.
 
 ## Dependency boundaries

@@ -4,6 +4,8 @@ import { rejectLegacyPresets } from "./presets.ts";
 
 const text = z.string().trim().min(1);
 const positive = z.number().finite().positive();
+const TRANSCRIPTION_URL = "https://api.groq.com/openai/v1";
+const TRANSCRIPTION_MODEL = "whisper-large-v3-turbo";
 
 /** Portable bot settings. Credentials and local DB/heartbeat paths stay in .env. */
 export const settingsSchema = z.strictObject({
@@ -32,6 +34,14 @@ export const settingsSchema = z.strictObject({
   SESSION_IDLE_MINUTES: positive.default(20),
   PERMISSION_TIMEOUT_MINUTES: positive.default(10),
   INBOX_PATH: text.default("./data/inbox"),
+  // Voice and video notes become text through an OpenAI-compatible
+  // transcription server. Off unless enabled; the key lives in .env.
+  TRANSCRIPTION: z.strictObject({
+    enabled: z.boolean().default(false),
+    url: text.default(TRANSCRIPTION_URL),
+    model: text.default(TRANSCRIPTION_MODEL),
+    language: text.optional(),
+  }).default({ enabled: false, url: TRANSCRIPTION_URL, model: TRANSCRIPTION_MODEL }),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;

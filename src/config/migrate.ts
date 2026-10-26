@@ -4,7 +4,8 @@ import { upgradeLegacyPresets } from "./presets.ts";
 import { parseSettings, settingsSchema } from "./settings.ts";
 
 export const LOCAL_ENV_KEYS = [
-  "BOT_TOKEN", "FORUM_CHAT_ID", "ALLOWED_USER_ID", "OPENROUTER_API_KEY", "DB_PATH", "PID_PATH",
+  "BOT_TOKEN", "FORUM_CHAT_ID", "ALLOWED_USER_ID", "OPENROUTER_API_KEY", "TRANSCRIPTION_API_KEY",
+  "DB_PATH", "PID_PATH",
 ] as const;
 
 const JSON_KEYS = new Set(["PROJECTS", "PRESETS", "CODEX_PRESETS", "OPENROUTER_PRESETS"]);
@@ -55,7 +56,7 @@ export function splitLegacyEnv(source: string) {
     }
   }
   const defaults: Record<string, string> = {
-    OPENROUTER_API_KEY: "", DB_PATH: "./data/state.db", PID_PATH: "./data/bot.pid",
+    OPENROUTER_API_KEY: "", TRANSCRIPTION_API_KEY: "", DB_PATH: "./data/state.db", PID_PATH: "./data/bot.pid",
   };
   const envText = "# Credentials and machine-specific paths. Portable settings are in config.json.\n" +
     LOCAL_ENV_KEYS.map((key) => retained.get(key) ?? `${key}=${defaults[key] ?? ""}`).join("\n") + "\n";

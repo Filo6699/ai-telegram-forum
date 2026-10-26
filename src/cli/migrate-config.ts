@@ -10,7 +10,7 @@ function main() {
   if (existsSync(configPath)) throw new Error("config.json already exists; refusing to overwrite it");
   const { settings, envText } = splitLegacyEnv(readFileSync(envPath, "utf8"));
   if (args.includes("--dry-run")) {
-    console.log("Validated: portable settings can move to config.json; .env will keep the six local values.");
+    console.log("Validated: portable settings can move to config.json; .env will keep only the local values.");
     return;
   }
   // Write settings first: a failed .env write must never discard the old settings.
@@ -22,7 +22,7 @@ function main() {
   } finally {
     rmSync(temporaryEnv, { force: true });
   }
-  console.log("Moved portable settings to config.json. .env contains only the six local values.");
+  console.log("Moved portable settings to config.json. .env contains only the local values.");
 }
 
 try {

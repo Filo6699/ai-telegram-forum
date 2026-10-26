@@ -126,11 +126,20 @@ export async function fetchDocument(
  * Three fates: pixels the model can see travel inside the message; anything
  * else with bytes behind it is saved and handed over as a path; and the
  * attachments that are pure metadata — a location, a poll — are already words,
- * so words are what the agent gets.
+ * so words are what the agent gets. A file marked `speech` is a recording of
+ * the user talking, which the bot may also turn into text.
  */
 export type Inbound =
   | { as: "image"; fileId: string; uniqueId: string; mime?: string }
-  | { as: "file"; fileId: string; uniqueId: string; kind: string; label: string; name?: string }
+  | {
+      as: "file";
+      fileId: string;
+      uniqueId: string;
+      kind: string;
+      label: string;
+      name?: string;
+      speech?: boolean;
+    }
   | { as: "text"; label: string };
 
 /** `0:07`, `3:20`, `1:04:11` — how Telegram itself writes a duration. */
@@ -229,6 +238,7 @@ export function classify(msg: Message): Inbound | undefined {
       uniqueId: round.file_unique_id,
       kind: "video_note",
       label: `video note (${mmss(round.duration)})`,
+      speech: true,
     };
   }
 
@@ -253,6 +263,7 @@ export function classify(msg: Message): Inbound | undefined {
       uniqueId: voice.file_unique_id,
       kind: "voice",
       label: `voice message (${mmss(voice.duration)})`,
+      speech: true,
     };
   }
 

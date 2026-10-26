@@ -51,5 +51,10 @@
   "PERMISSION_TIMEOUT_MINUTES": 10,
   "SESSION_IDLE_MINUTES": 20,
   "DELETE_AFTER_HOURS": 168,
-  "INBOX_PATH": "./data/inbox"
+  "INBOX_PATH": "./data/inbox",
+  "TRANSCRIPTION": {
+    "enabled": false,
+    "url": "https://api.groq.com/openai/v1",
+    "model": "whisper-large-v3-turbo"
+  }
 }

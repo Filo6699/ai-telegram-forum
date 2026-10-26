@@ -76,11 +76,12 @@ test("OpenRouter still requires the API key in env and parses JSON preset object
   assert.throws(() => buildConfig(parseSettings({ DEFAULT_PRESET: "missing" }), local), /does not name a configured preset/);
 });
 
-test("migration preserves the six local values and converts multiline settings to native JSON", () => {
+test("migration preserves the local values and converts multiline settings to native JSON", () => {
   const source = `BOT_TOKEN="test:token#with-hash"
 FORUM_CHAT_ID=-100123
 ALLOWED_USER_ID=123
 OPENROUTER_API_KEY='test-key'
+TRANSCRIPTION_API_KEY=gsk_test
 DB_PATH='C:\\local\\state.db'
 PID_PATH=./bot.pid
 PROJECTS='{

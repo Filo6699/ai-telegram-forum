@@ -67,6 +67,7 @@ BOT_TOKEN=your-bot-token
 FORUM_CHAT_ID=-1001234567890
 ALLOWED_USER_ID=123456789
 OPENROUTER_API_KEY=
+TRANSCRIPTION_API_KEY=
 DB_PATH=./data/state.db
 PID_PATH=./data/bot.pid
 ```
@@ -143,6 +144,26 @@ Within a topic, send messages, photos, or files. Images go to the agent as
 images; other attachments are saved locally and passed as file paths. The agent
 can send screenshots, documents, and other files back. A live status message
 shows tool activity while it works.
+
+Voice messages and video notes reach the agent as files unless you turn on
+transcription. The bot then sends each recording to a server that speaks
+OpenAI's `/audio/transcriptions` API and gives the agent the text along with
+the file path. Groq's free plan works out of the box: put the key in `.env` as
+`TRANSCRIPTION_API_KEY` and enable the block in `config.json`:
+
+```json
+"TRANSCRIPTION": {
+  "enabled": true,
+  "url": "https://api.groq.com/openai/v1",
+  "model": "whisper-large-v3-turbo"
+}
+```
+
+An optional `"language": "ru"` skips language detection. To keep audio on your
+machine, point `url` at a self-hosted Whisper server with the same API, such as
+[speaches](https://github.com/speaches-ai/speaches). If transcription fails, the
+bot tells you and passes the file on as before. Audio files you send as music
+stay files.
 
 If an outgoing attachment fails, the agent receives the failed file paths and
 delivery status, including partial uploads. It is instructed to tell you
