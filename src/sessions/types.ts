@@ -26,6 +26,8 @@ export interface AgentSettings {
 export interface AgentTurnResult {
   /** The dedicated capacity recovery hook will deliver this failure. */
   recoveringCapacity?: boolean;
+  /** Provider reset hint when account usage reads are temporarily unavailable. */
+  quotaResetsAt?: string | null;
   ok: boolean;
   usage: Usage;
   failure: string | null;
@@ -65,6 +67,8 @@ export interface AgentSession {
   interrupt(): Promise<boolean>;
   /** Retry the last capacity failure if no newer user input has superseded it. */
   retryCapacity?(): Promise<boolean>;
+  /** Continue a subscription-limited task if no newer input has superseded it. */
+  retryQuota?(): Promise<boolean>;
   applySettings(settings: AgentSettings): Promise<void>;
   suggestTitle(current: string): Promise<string | null>;
   close(): void;

@@ -74,16 +74,16 @@ async function read(q: Asker): Promise<PlanLimits | null> {
     console.warn("[weekly] recording a Claude sample failed:", String(err));
   }
   const windows: LimitWindow[] = [];
-  const add = (label: string, w: any) => {
+  const add = (label: string, w: any, modelFamily?: string) => {
     if (w && (w.utilization !== null || w.resets_at)) {
-      windows.push({ label, utilization: w.utilization ?? null, resetsAt: w.resets_at ?? null });
+      windows.push({ label, utilization: w.utilization ?? null, resetsAt: w.resets_at ?? null, ...(modelFamily ? { modelFamily } : {}) });
     }
   };
   add("Session (5h)", r.five_hour);
   add("Week (all)", r.seven_day);
-  add("Week (Opus)", r.seven_day_opus);
-  add("Week (Sonnet)", r.seven_day_sonnet);
-  for (const m of r.model_scoped ?? []) add(`Week (${m.display_name})`, m);
+  add("Week (Opus)", r.seven_day_opus, "opus");
+  add("Week (Sonnet)", r.seven_day_sonnet, "sonnet");
+  for (const m of r.model_scoped ?? []) add(`Week (${m.display_name})`, m, /opus|sonnet|haiku/i.exec(m.display_name)?.[0]?.toLowerCase());
 
   return { subscription: plan, windows };
 }

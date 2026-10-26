@@ -3,6 +3,8 @@ export interface LimitWindow {
   label: string;
   utilization: number | null;
   resetsAt: string | null;
+  /** A model-specific allowance; absent for account-wide windows. */
+  modelFamily?: string;
 }
 
 export interface PlanLimits {

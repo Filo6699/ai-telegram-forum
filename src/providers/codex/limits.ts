@@ -49,6 +49,7 @@ function mapLimits(result: RateLimitsResult): PlanLimits | null {
         label: `${name} (${durationLabel(window.windowDurationMins)})`,
         utilization: window.usedPercent ?? null,
         resetsAt: window.resetsAt ? new Date(window.resetsAt * 1000).toISOString() : null,
+        ...(/spark/i.test(id + name) ? { modelFamily: "spark" } : {}),
       });
     }
   }

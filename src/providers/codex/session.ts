@@ -12,6 +12,7 @@ import { zeroUsage, type Usage } from "../../sessions/usage.ts";
 import { clearPermissions } from "../../telegram/permission.ts";
 import { CodexResponseUsage, type CodexTokenUsage } from "./token-usage.ts";
 import { isCapacityFailure } from "../../sessions/capacity-retry.ts";
+import { isQuotaFailure, QUOTA_CONTINUATION } from "../../sessions/quota-retry.ts";
 
 export class CodexAgentSession implements AgentSession {
   private pending: CodexInput[] = [];
@@ -27,6 +28,7 @@ export class CodexAgentSession implements AgentSession {
   private failure: string | null = null;
   private settings: AgentSettings;
   private capacityInput: CodexInput | null = null;
+  private quotaInput: CodexInput | null = null;
   private inputVersion = 0;
 
   constructor(private opts: AgentSessionOptions, private server = new CodexAppServerClient()) {
@@ -50,6 +52,7 @@ export class CodexAgentSession implements AgentSession {
 
   async send(input: AgentInput): Promise<void> {
     this.capacityInput = null;
+    this.quotaInput = null;
     this.inputVersion++;
     this.pending.push(input);
     if (!this.running) void this.run();
@@ -58,6 +61,13 @@ export class CodexAgentSession implements AgentSession {
   async retryCapacity(): Promise<boolean> {
     if (this.closed || !this.capacityInput || this.turnActive || this.pending.length) return false;
     const input = this.capacityInput;
+    await this.send(input);
+    return true;
+  }
+
+  async retryQuota(): Promise<boolean> {
+    if (this.closed || !this.quotaInput || this.turnActive || this.pending.length) return false;
+    const input = this.quotaInput;
     await this.send(input);
     return true;
   }
@@ -115,8 +125,9 @@ export class CodexAgentSession implements AgentSession {
   }
 
   async interrupt(): Promise<boolean> {
-    if (!this.turnActive && this.capacityInput) {
+    if (!this.turnActive && (this.capacityInput || this.quotaInput)) {
       this.capacityInput = null;
+      this.quotaInput = null;
       this.inputVersion++;
       return true;
     }
@@ -140,6 +151,7 @@ export class CodexAgentSession implements AgentSession {
   close(): void {
     this.closed = true;
     this.capacityInput = null;
+    this.quotaInput = null;
     this.questions.close();
     this.server.close();
   }
@@ -223,9 +235,9 @@ export class CodexAgentSession implements AgentSession {
               onAccepted: () => { accepted = true; },
             });
           } catch (err) {
-            // Only an explicit capacity rejection is safe to retry. A lost
+            // Only an explicit capacity/quota rejection is safe to retry. A lost
             // connection may already have accepted the request.
-            if (!isCapacityFailure(String(err))) throw err;
+            if (!isCapacityFailure(String(err)) && !isQuotaFailure(String(err))) throw err;
             result = { ok: false, failure: `⚠️ ${String(err)}`, stopped: this.stopped,
               sent: 0, usage: zeroUsage(), answer: "" };
           }
@@ -238,6 +250,8 @@ export class CodexAgentSession implements AgentSession {
           // Continue that task instead of replaying its input or its tools.
           if (accepted) input = { text: "Continue the previous request after the model capacity error. Check the existing progress before continuing; do not repeat completed actions.", images: [] };
           this.capacityInput = recover && version === this.inputVersion ? input : null;
+          this.quotaInput = !result.ok && !this.closed && !this.stopped && isQuotaFailure(result.failure)
+            && version === this.inputVersion ? (accepted ? { text: QUOTA_CONTINUATION, images: [] } : input) : null;
           await this.finish(result.ok, result.usage, recover);
           if (!recover || this.closed) break;
           const retry = await this.opts.hooks.recoverCapacity!(result.failure!, retries, version === this.inputVersion);

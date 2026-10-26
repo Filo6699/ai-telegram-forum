@@ -5,6 +5,7 @@ import { TG_SEND_TOOL } from "../../telegram/tg-tools.ts";
 import type { AgentInput, AgentSession, AgentSessionOptions, AgentSettings, AgentSideResult } from "../../sessions/types.ts";
 import { zeroUsage, type Usage } from "../../sessions/usage.ts";
 import { clearPermissions } from "../../telegram/permission.ts";
+import { isQuotaFailure, QUOTA_CONTINUATION } from "../../sessions/quota-retry.ts";
 
 function claudeMessage(input: AgentInput): SDKUserMessage {
   const content: SDKUserMessage["message"]["content"] = input.images.length
@@ -37,8 +38,13 @@ export class ClaudeAgentSession implements AgentSession {
   private stopped = false;
   private stderr = "";
   private settings: AgentSettings;
+  private lastInput: SDKUserMessage | null = null;
+  private quotaInput: SDKUserMessage | null = null;
+  private apiFailure: string | null = null;
+  private quotaRejected = false;
+  private quotaResetsAt: string | null = null;
 
-  constructor(private opts: AgentSessionOptions) {
+  constructor(private opts: AgentSessionOptions, private startQuery = query) {
     this.settings = {
       sessionId: opts.sessionId,
       effort: opts.effort,
@@ -53,11 +59,24 @@ export class ClaudeAgentSession implements AgentSession {
   }
 
   async send(input: AgentInput): Promise<void> {
+    this.quotaInput = null;
     this.pending.push(claudeMessage(input));
     this.wake?.();
     this.wake = null;
     if (!this.running) void this.run();
     await this.beginTurn();
+  }
+
+  async retryQuota(): Promise<boolean> {
+    if (this.closed || !this.quotaInput || this.turnActive || this.pending.length) return false;
+    const input = this.quotaInput;
+    this.quotaInput = null;
+    this.pending.push(input);
+    this.wake?.();
+    this.wake = null;
+    if (!this.running) void this.run();
+    await this.beginTurn();
+    return true;
   }
 
   async btw(input: AgentInput): Promise<AgentSideResult> {
@@ -86,6 +105,10 @@ export class ClaudeAgentSession implements AgentSession {
   }
 
   async interrupt(): Promise<boolean> {
+    if (!this.turnActive && this.quotaInput) {
+      this.quotaInput = null;
+      return true;
+    }
     if (!this.turnActive || !this.q) return false;
     this.stopped = true;
     await this.q.interrupt();
@@ -119,6 +142,7 @@ export class ClaudeAgentSession implements AgentSession {
 
   close(): void {
     this.closed = true;
+    this.quotaInput = null;
     this.wake?.();
     this.wake = null;
   }
@@ -128,12 +152,18 @@ export class ClaudeAgentSession implements AgentSession {
     this.turnActive = true;
     this.stopped = false;
     this.stderr = "";
+    this.apiFailure = null;
+    this.quotaRejected = false;
+    this.quotaResetsAt = null;
     this.opts.channel.resetSent();
     await this.opts.hooks.beginTurn();
   }
 
   private async finish(ok: boolean, usage: Usage, failure: string | null): Promise<void> {
     const stopped = this.stopped;
+    this.quotaInput = !ok && !stopped && !this.closed && isQuotaFailure(failure)
+      ? this.settings.sessionId ? claudeMessage({ text: QUOTA_CONTINUATION, images: [] }) : this.lastInput
+      : null;
     this.turnActive = false;
     this.stopped = false;
     await this.opts.hooks.endTurn({
@@ -142,13 +172,17 @@ export class ClaudeAgentSession implements AgentSession {
       failure,
       stopped,
       sent: this.opts.channel.sent,
+      quotaResetsAt: this.quotaResetsAt,
     });
   }
 
   private async *input(): AsyncGenerator<SDKUserMessage> {
     while (!this.closed) {
       if (!this.pending.length) await new Promise<void>((resolve) => (this.wake = resolve));
-      while (this.pending.length) yield this.pending.shift()!;
+      while (!this.closed && this.pending.length) {
+        this.lastInput = this.pending.shift()!;
+        yield this.lastInput;
+      }
     }
   }
 
@@ -156,7 +190,7 @@ export class ClaudeAgentSession implements AgentSession {
     this.running = true;
     this.closed = false;
     try {
-      this.q = query({
+      this.q = this.startQuery({
         prompt: this.input(),
         options: queryOptions({
           bot: this.opts.bot,
@@ -192,21 +226,28 @@ export class ClaudeAgentSession implements AgentSession {
               }
             }
             const text = said.join("");
+            if (msg.error && !msg.parent_tool_use_id) this.apiFailure = text || String(msg.error);
             if (text.trim() && !msg.parent_tool_use_id) this.opts.hooks.text(text);
             break;
           }
 
+          case "rate_limit_event":
+            if (msg.rate_limit_info.status === "rejected" && /^(five_hour|seven_day)/.test(msg.rate_limit_info.rateLimitType ?? "")) {
+              this.quotaRejected = true;
+              if (msg.rate_limit_info.resetsAt) this.quotaResetsAt = new Date(msg.rate_limit_info.resetsAt * 1000).toISOString();
+            }
+            break;
+
           case "result": {
             this.settings.sessionId = msg.session_id;
             this.opts.hooks.session(msg.session_id);
-            const ok = msg.subtype === "success";
+            const ok = msg.subtype === "success" && !msg.is_error && !this.apiFailure;
             if (ok && typeof (msg as any).result === "string") {
               this.opts.hooks.text((msg as any).result);
             }
-            const failure =
-              !ok && !this.stopped
-                ? `⚠️ ${msg.subtype}: ${(msg as any).error ?? ""}`
-                : null;
+            const detail = this.apiFailure ?? (msg.subtype === "success" ? msg.result : msg.errors.join("\n"));
+            const failure = !ok && !this.stopped
+              ? `⚠️ ${this.quotaRejected ? "Subscription usage limit reached. " : ""}${detail || msg.subtype}` : null;
             await this.finish(ok, readUsage(msg), failure);
             break;
           }

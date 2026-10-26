@@ -10,7 +10,8 @@ import {
   codexWeeklyPart,
   codexWeeklyPercent,
 } from "../providers/codex/summary.ts";
-import { sampleClaudeWeekly } from "../providers/claude/limits.ts";
+import { fetchPlanLimits, sampleClaudeWeekly } from "../providers/claude/limits.ts";
+import { fetchCodexPlanLimits } from "../providers/codex/limits.ts";
 import {
   claudeSessionUsd,
   claudeWeeklyRatio,
@@ -43,6 +44,8 @@ import { TurnStatus } from "../telegram/status.ts";
 import { createTgChannel } from "../telegram/tg-tools.ts";
 import { replyContext } from "../telegram/reply.ts";
 import { CapacityRecovery } from "../telegram/capacity.ts";
+import { QuotaRecovery } from "../telegram/quota.ts";
+import { isQuotaFailure } from "./quota-retry.ts";
 
 export type { AgentInput } from "./types.ts";
 
@@ -61,6 +64,7 @@ export class TopicSession {
   private out: TopicRenderer;
   private agent: AgentSession;
   readonly capacity: CapacityRecovery;
+  readonly quota: QuotaRecovery;
   private inputVersion = 0;
   private turnInputVersion = 0;
 
@@ -96,6 +100,15 @@ export class TopicSession {
   ) {
     this.out = new TopicRenderer(bot.api, cfg.chatId, threadId);
     this.capacity = new CapacityRecovery(bot, threadId, this.out);
+    this.quota = new QuotaRecovery(bot, threadId, this.out,
+      () => this.provider === "codex" ? fetchCodexPlanLimits() : fetchPlanLimits(this.live),
+      async () => {
+        if (this.closed || this.turnActive) return false;
+        touch(this.threadId);
+        return await this.agent.retryQuota?.() ?? false;
+      },
+      () => this.modelId ?? defaultModel(this.provider),
+    );
     const channel = createTgChannel(this.out, cwd);
     this.agent = createAgentSession({
       bot,
@@ -233,14 +246,16 @@ export class TopicSession {
     touch(this.threadId);
     this.armIdleTimer();
     if (content.replyTo && await this.agent.answerQuestion?.(content.replyTo.messageId, content)) {
-      if (this.capacity.pending) {
+      if (this.capacity.pending || this.quota.pending) {
         this.inputVersion++;
         this.capacity.clear("Superseded by an answer to a native question.");
+        this.quota.clear("Superseded by an answer to a native question.");
       }
       return;
     }
     this.inputVersion++;
     this.capacity.clear("Superseded by a new message.");
+    this.quota.clear("Superseded by a new message.");
     const progress = getTopic(this.threadId)?.progress ?? "off";
     await this.agent.send({ ...content, text: `${progressInstruction(progress)}\n\n${replyContext(content)}` });
   }
@@ -305,7 +320,8 @@ export class TopicSession {
    * Returns false when there was nothing to interrupt.
    */
   async interrupt(): Promise<boolean> {
-    const waiting = this.capacity.clear("Retries stopped.");
+    const quotaWaiting = this.quota.clear("Automatic quota recovery stopped.");
+    const waiting = this.capacity.clear("Retries stopped.") || quotaWaiting;
     if (waiting) {
       await this.agent.interrupt();
       return true;
@@ -327,6 +343,7 @@ export class TopicSession {
     this.idleTimer = null;
     this.closed = true;
     this.capacity.clear("Session closed. Automatic retries cancelled.");
+    this.quota.clear("Session closed. Automatic quota recovery cancelled.");
     // Blanket approvals are scoped to the live session, not to the topic.
     clearPermissions(this.threadId);
     this.agent.close();
@@ -337,7 +354,7 @@ export class TopicSession {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => {
       // Never pull the rug out from under a running turn.
-      if (this.turnActive || this.sideTurns > 0 || this.capacity.pending) return this.armIdleTimer();
+      if (this.turnActive || this.sideTurns > 0 || this.capacity.pending || this.quota.pending) return this.armIdleTimer();
       console.log(`[session] closing idle session for topic ${this.threadId}`);
       forget(this.threadId);
       this.close();
@@ -397,11 +414,17 @@ export class TopicSession {
     this.status = null;
     this.turnActive = false;
 
+    const quotaFailure = !result.ok && !result.stopped && !this.closed && this.provider !== "openrouter"
+      && this.turnInputVersion === this.inputVersion && isQuotaFailure(result.failure);
     // The agent stayed silent — fall back to whatever text the turn produced,
     // rather than leaving the topic with nothing but a summary.
-    if (result.sent === 0) await this.out.send();
+    if (result.sent === 0 && !quotaFailure) await this.out.send();
     else this.out.clear();
-    if (result.failure && !result.recoveringCapacity) await this.out.sendText(result.failure);
+    if (quotaFailure) await this.quota.offer(result.failure!, result.quotaResetsAt);
+    else {
+      this.quota.clear(result.ok ? "Task resumed." : "Turn ended.");
+      if (result.failure && !result.recoveringCapacity) await this.out.sendText(result.failure);
+    }
     if (!result.recoveringCapacity) this.capacity.clear(result.ok ? "Recovered." : "Turn ended.");
 
     addUsage(this.threadId, result.usage);

@@ -10,6 +10,7 @@ const sweepUrl = new URL("../src/app/sweep.ts", import.meta.url).href;
 const dbUrl = new URL("../src/storage/db.ts", import.meta.url).href;
 const settingsUrl = new URL("../src/config/settings.ts", import.meta.url).href;
 const runtimeUrl = new URL("../src/config/runtime.ts", import.meta.url).href;
+const topicUrl = new URL("../src/sessions/topic.ts", import.meta.url).href;
 
 function run(hours: string | undefined, script: string) {
   const cwd = mkdtempSync(join(tmpdir(), "tg-sweep-"));
@@ -49,10 +50,14 @@ for (const hours of ["0", undefined, "1.5"]) {
       const { cfg } = await import(${JSON.stringify(configUrl)});
       const { createTopic, getTopic } = await import(${JSON.stringify(dbUrl)});
       const { startSweep } = await import(${JSON.stringify(sweepUrl)});
+      const { sessionFor, endSession } = await import(${JSON.stringify(topicUrl)});
       assert.equal(cfg.deleteAfterMs, ${expectedMs});
       const now = Date.now();
       Date.now = () => now - 8 * 24 * 3600_000;
       createTopic({ threadId: 1, cwd: process.cwd(), title: "stale" });
+      createTopic({ threadId: 3, cwd: process.cwd(), title: "waiting for weekly quota", provider: "codex" });
+      const waiting = sessionFor({ api: {} }, getTopic(3));
+      waiting.quota.enabled = true;
       Date.now = () => now;
       createTopic({ threadId: 2, cwd: process.cwd(), title: "recent" });
       const deleted = [];
@@ -80,6 +85,8 @@ for (const hours of ["0", undefined, "1.5"]) {
         assert.deepEqual(deleted, [1, 2]);
         assert.equal(getTopic(2), undefined);
       }
+      assert.ok(getTopic(3), "a quota wait must survive idle-topic deletion");
+      endSession(3);
     `);
     assert.equal(result.status, 0, result.stderr || String(result.error));
   });

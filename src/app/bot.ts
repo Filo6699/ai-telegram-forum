@@ -59,6 +59,7 @@ import { claudeCalibrationText, planLimitsText } from "../telegram/limits.ts";
 import { MediaGroupCollector } from "../telegram/media-group.ts";
 import { registerPermissionButtons } from "../telegram/permission.ts";
 import { registerCapacityButtons } from "../telegram/capacity.ts";
+import { registerQuotaButtons } from "../telegram/quota.ts";
 import { anyLiveQuery, capacityRetrySettingsChanged, liveSession, sessionFor, type AgentInput } from "../sessions/topic.ts";
 import { sideTurnReady } from "../sessions/side-turn.ts";
 import {
@@ -1138,6 +1139,12 @@ async function main() {
     }
     if (!session || !current) return;
     if (action === "retry") await session.retryCapacity();
+    else await session.interrupt();
+  });
+  registerQuotaButtons(bot, async (threadId, action, messageId) => {
+    const session = liveSession(threadId);
+    if (!session?.quota.owns(messageId)) return;
+    if (action === "wait") await session.quota.start(messageId);
     else await session.interrupt();
   });
   registerPermissionButtons(bot);

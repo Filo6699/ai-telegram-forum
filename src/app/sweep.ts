@@ -1,7 +1,7 @@
 import { GrammyError, HttpError, type Bot } from "grammy";
 import { cfg } from "../config/env.ts";
 import { deleteTopic, listStale, type Topic } from "../storage/db.ts";
-import { endSession } from "../sessions/topic.ts";
+import { endSession, liveSession } from "../sessions/topic.ts";
 
 const SWEEP_INTERVAL_MS = 5 * 60_000;
 
@@ -37,6 +37,8 @@ async function sweepOnce(bot: Bot): Promise<void> {
   // Only deletion: closing a topic pushes a notification to the user, which is
   // pure noise for a topic they've already stopped using.
   for (const t of listStale(cfg.deleteAfterMs)) {
+    // A weekly quota wait is active work, even without recent user messages.
+    if (liveSession(t.thread_id)?.quota.pending) continue;
     try {
       await bot.api.deleteForumTopic(cfg.chatId, t.thread_id);
       endSession(t.thread_id);
