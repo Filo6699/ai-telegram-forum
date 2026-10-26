@@ -17,7 +17,7 @@ import {
   type DocumentPart,
   type ImagePart,
 } from "../telegram/media.ts";
-import { placeholderTitle, resolveCwd } from "../sessions/cwd.ts";
+import { existingFolders, isDirectory, placeholderTitle, resolveCwd } from "../sessions/cwd.ts";
 import {
   asEffort,
   defaultEffort,
@@ -727,6 +727,38 @@ function settingsFromPicks(provider: Provider, picks: Picks, base: ModelSettings
 }
 
 /**
+ * A launch whose folder doesn't exist would only fail once the agent process
+ * starts, with an error that never names the folder. Say so up front and let
+ * the user move the launch into an existing project instead. `null` = no launch.
+ */
+async function chooseFolder(missing: string, title: string): Promise<string | null> {
+  const folders = existingFolders();
+  if (!folders.length) {
+    await bot.api
+      .sendMessage(cfg.chatId, `⚠️ folder ${missing} doesn't exist, and no configured project folder does either.`, {
+        message_thread_id: cfg.launcherThreadId,
+      })
+      .catch((err) => console.warn("[launch] reporting a missing folder failed:", String(err)));
+    return null;
+  }
+  const { picks, cancelled } = await askPick(bot, {
+    threadId: cfg.launcherThreadId,
+    title: `📁 ${missing} doesn't exist. Start «${title}» in:`,
+    groups: [{
+      key: "f",
+      options: folders.map((f) => ({ value: f.cwd, label: f.name })),
+      perRow: 3,
+      initial: null,
+      fallback: folders[0]!.cwd,
+      summary: (value) => `📁 ${value ?? folders[0]!.cwd}`,
+    }],
+    allowCancel: true,
+    requireConfirm: true,
+  });
+  return cancelled ? null : (picks.f ?? folders[0]!.cwd);
+}
+
+/**
  * Spin up a new topic + session for a launcher message.
  *
  * Detached on purpose: grammy handles updates one at a time, and this waits on
@@ -741,8 +773,11 @@ async function launch(
   images: ImagePart[],
   sources: any[] = [ctx],
 ): Promise<void> {
-  const { cwd, prompt } = resolveCwd(text);
+  const resolved = resolveCwd(text);
+  const { prompt } = resolved;
   const title = placeholderTitle(prompt || "image");
+  const cwd = isDirectory(resolved.cwd) ? resolved.cwd : await chooseFolder(resolved.cwd, title);
+  if (cwd === null) return;
   const provider = nextProvider ?? cfg.provider;
 
   // Nothing exists yet: the provider, model, and effort are chosen first — in

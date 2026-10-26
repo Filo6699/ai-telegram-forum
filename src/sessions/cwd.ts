@@ -1,3 +1,5 @@
+import { statSync } from "node:fs";
+import { resolve } from "node:path";
 import { cfg } from "../config/env.ts";
 
 export interface Resolved {
@@ -33,6 +35,32 @@ export function resolveCwd(text: string): Resolved {
   }
 
   return { cwd: cfg.defaultCwd, prompt: trimmed };
+}
+
+/** Is there a directory a session could start in at this path? */
+export function isDirectory(path: string): boolean {
+  try {
+    return statSync(path, { throwIfNoEntry: false })?.isDirectory() ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The folders a launch can fall back to when its own cwd is missing: the
+ * default first, then every project alias, each path once and only if it exists.
+ */
+export function existingFolders(): { name: string; cwd: string }[] {
+  const seen = new Set<string>();
+  const folders: { name: string; cwd: string }[] = [];
+  for (const [name, cwd] of [["default", cfg.defaultCwd], ...Object.entries(cfg.projects)] as [string, string][]) {
+    const key = resolve(cwd);
+    if (seen.has(key) || !isDirectory(cwd)) continue;
+    seen.add(key);
+    const alias = Object.entries(cfg.projects).find(([, path]) => resolve(path) === key)?.[0];
+    folders.push({ name: alias ?? name, cwd });
+  }
+  return folders;
 }
 
 /**

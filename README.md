@@ -137,7 +137,7 @@ The first uses `DEFAULT_CWD`. The second uses an alias from `PROJECTS` in
 }
 ```
 
-The third uses an absolute path. The new topic remembers the directory, so you
+The third uses an absolute path. If the directory doesn't exist, the bot asks you to pick one of the existing `PROJECTS` folders before the model picker, or to cancel. The new topic remembers the directory, so you
 only need the prefix when starting a session.
 
 Within a topic, send messages, photos, or files. Images go to the agent as
