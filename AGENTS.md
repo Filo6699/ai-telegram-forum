@@ -47,7 +47,9 @@ npm run codexify -- --dry-run    # backwards-compatible Codex alias
   never relayed. Native questions are delivered immediately and bound to the
   Telegram message so a reply answers that exact question. Don't add
   unsolicited activity posts — tool calls belong in the live status line,
-  which is one bot-owned message per turn, edited in place. The explicit
+  which is one bot-owned message per turn, edited in place.
+  The transcript quoted under a voice or video note is bot-owned too: it shows
+  the user what speech-to-text heard before the agent answers. The explicit
   `/toolcalls` setting enables individual tool-call messages; `/progress`
   controls agent-authored progress updates.
 - **Never post a partial thought.** One `send` call is one finished message.

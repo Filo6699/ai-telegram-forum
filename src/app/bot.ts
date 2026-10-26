@@ -4,6 +4,7 @@ import { progressLevels, toolcallModes, type Progress, type Toolcalls } from "..
 import { setActivity } from "../storage/db.ts";
 import { cfg } from "../config/env.ts";
 import { transcribe } from "../transcription/client.ts";
+import { escapeHtml } from "../telegram/html.ts";
 import { botCommands, parseCommand, type ParsedCommand } from "../telegram/commands.ts";
 import { fetchCodexPlanLimits } from "../providers/codex/limits.ts";
 import { fetchCodexSessionUsage, type CodexSessionUsage } from "../providers/codex/session-usage.ts";
@@ -934,6 +935,26 @@ bot.on("message:text", async (ctx) => {
 const withNote = (caption: string, note: string): string =>
   caption ? `${caption}\n\n${note}` : note;
 
+/** Telegram's message cap, less room for the quote markup around the text. */
+const MAX_TRANSCRIPT_ECHO = 3_900;
+
+/**
+ * Quote the transcript under the recording it came from, so the user sees
+ * what the agent will read before the agent answers. Purely informational:
+ * a failed post is logged and the message still goes through.
+ */
+async function showTranscript(ctx: any, heard: string): Promise<void> {
+  const clipped = heard.length > MAX_TRANSCRIPT_ECHO ? `${heard.slice(0, MAX_TRANSCRIPT_ECHO)}…` : heard;
+  const text = clipped
+    ? `🎙 <blockquote expandable>${escapeHtml(clipped)}</blockquote>`
+    : "🎙 <i>no speech recognised</i>";
+  await replySilently(ctx, text, {
+    message_thread_id: ctx.message.message_thread_id,
+    parse_mode: "HTML",
+    reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
+  }).catch((err) => console.warn("[media] posting the transcript failed:", String(err)));
+}
+
 /** Turn one non-text Telegram update into provider-neutral agent input. */
 async function contentFrom(ctx: any): Promise<AgentInput | null> {
   const thread = ctx.message.message_thread_id;
@@ -987,7 +1008,11 @@ async function contentFrom(ctx: any): Promise<AgentInput | null> {
   // back to the audio. A failed transcription still delivers the file.
   try {
     const heard = await transcribe(cfg.transcription, file.path);
-    const said = heard ? `Transcript:\n${heard}` : "Transcript: no speech recognised.";
+    await showTranscript(ctx, heard);
+    const said = heard
+      ? "Transcript (automatic speech-to-text, so words may be misheard: infer the intended " +
+        `meaning from context, and ask the user if it stays unclear):\n${heard}`
+      : "Transcript: no speech recognised.";
     return contentOf(withNote(caption, `${note}\n${said}`), []);
   } catch (err) {
     console.warn(`[media] transcribing the ${inbound.kind} failed:`, String(err));

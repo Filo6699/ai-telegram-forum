@@ -147,8 +147,10 @@ shows tool activity while it works.
 
 Voice messages and video notes reach the agent as files unless you turn on
 transcription. The bot then sends each recording to a server that speaks
-OpenAI's `/audio/transcriptions` API and gives the agent the text along with
-the file path. Groq's free plan works out of the box: put the key in `.env` as
+OpenAI's `/audio/transcriptions` API, quotes the transcript under your
+recording so you can see what it heard, and gives the agent the text along
+with the file path. The agent knows the text came from speech recognition, so
+it reads past misheard words by context and asks when it can't. Groq's free plan works out of the box: put the key in `.env` as
 `TRANSCRIPTION_API_KEY` and enable the block in `config.json`:
 
 ```json

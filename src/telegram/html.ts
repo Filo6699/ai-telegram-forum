@@ -10,7 +10,7 @@
  * fenced code, links); everything else degrades to escaped plain text.
  */
 
-const escapeHtml = (s: string): string =>
+export const escapeHtml = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /** Only http(s) and tg links; anything else renders as plain text. */

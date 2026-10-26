@@ -42,6 +42,8 @@ npm run codexify -- --dry-run    # same for a Codex thread
   agent calling `mcp__tg__send`; the transcript is never relayed. Don't add
   "🔧 Bash"-style activity posts — tool calls belong in the live status line,
   which is one bot-owned message per turn, edited in place.
+  The transcript quoted under a voice or video note is bot-owned too: it shows
+  the user what speech-to-text heard before the agent answers.
 - **Never post a partial thought.** One `send` call is one finished message.
   Assistant text is still buffered, but only as the fallback for a turn that
   ended without the agent ever calling `send` — losing a reply the session
