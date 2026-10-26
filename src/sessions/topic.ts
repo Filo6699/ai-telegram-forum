@@ -503,7 +503,7 @@ function summarize(
   if (provider === "openrouter" && (usage.inTokens || usage.outTokens)) {
     parts.push(`${fmtTokens(usage.inTokens)}↑ ${fmtTokens(usage.outTokens)}↓`);
   }
-  if (provider !== "codex" && usage.costUsd !== null && usage.costUsd > 0) {
+  if (provider === "openrouter" && usage.costUsd !== null && usage.costUsd > 0) {
     parts.push(`$${usage.costUsd.toFixed(4)}`);
   }
   parts.push(...extra);
