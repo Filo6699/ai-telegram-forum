@@ -60,6 +60,9 @@ export interface AgentSessionHooks {
  */
 export interface AgentSession {
   readonly controlQuery: Query | null;
+  /** Background tasks (shells, monitors, agents) the live runner still has
+   * going. Each can start a turn of its own when it reports back. */
+  readonly backgroundTasks?: number;
   send(input: AgentInput): Promise<void>;
   /** Consume a reply to a native question before adding ordinary prompt instructions. */
   answerQuestion?(messageId: number, input: AgentInput): Promise<boolean>;

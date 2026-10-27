@@ -49,6 +49,9 @@ import { isQuotaFailure } from "./quota-retry.ts";
 
 export type { AgentInput } from "./types.ts";
 
+/** How long a session with background tasks may stay silent before it is closed anyway. */
+const BACKGROUND_HOLD_MS = 3 * 60 * 60_000;
+
 /**
  * One live Agent SDK session per topic.
  *
@@ -86,6 +89,7 @@ export class TopicSession {
   private closed = false;
 
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private idleSince = 0;
 
   constructor(
     private bot: Bot,
@@ -349,13 +353,21 @@ export class TopicSession {
     this.agent.close();
   }
 
-  private armIdleTimer(): void {
+  private armIdleTimer(rearm = false): void {
     if (this.closed) return;
+    if (!rearm) this.idleSince = Date.now();
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => {
       // Never pull the rug out from under a running turn.
-      if (this.turnActive || this.sideTurns > 0 || this.capacity.pending || this.quota.pending) return this.armIdleTimer();
-      console.log(`[session] closing idle session for topic ${this.threadId}`);
+      if (this.turnActive || this.sideTurns > 0 || this.capacity.pending || this.quota.pending) return this.armIdleTimer(true);
+      // A background shell or monitor reports back by starting a turn, and that
+      // turn needs a live session to answer through. Wait for it, within limits.
+      const tasks = this.agent.backgroundTasks ?? 0;
+      if (tasks && Date.now() - this.idleSince < BACKGROUND_HOLD_MS) return this.armIdleTimer(true);
+      console.log(
+        `[session] closing idle session for topic ${this.threadId}` +
+          (tasks ? ` (${tasks} background task(s) still running)` : ""),
+      );
       forget(this.threadId);
       this.close();
     }, cfg.sessionIdleMs);

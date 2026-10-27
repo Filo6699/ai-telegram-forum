@@ -43,6 +43,7 @@ export class ClaudeAgentSession implements AgentSession {
   private apiFailure: string | null = null;
   private quotaRejected = false;
   private quotaResetsAt: string | null = null;
+  private tasks = 0;
 
   constructor(private opts: AgentSessionOptions, private startQuery = query) {
     this.settings = {
@@ -56,6 +57,10 @@ export class ClaudeAgentSession implements AgentSession {
 
   get controlQuery(): Query | null {
     return this.q;
+  }
+
+  get backgroundTasks(): number {
+    return this.tasks;
   }
 
   async send(input: AgentInput): Promise<void> {
@@ -145,6 +150,10 @@ export class ClaudeAgentSession implements AgentSession {
     this.quotaInput = null;
     this.wake?.();
     this.wake = null;
+    // Ending the input closes the CLI's stdin, but a CLI with background tasks
+    // keeps running and starts turns when they report back. Those turns can't
+    // reach the tg tool or the bot, so stop the process instead.
+    if (this.tasks) this.q?.close();
   }
 
   private async beginTurn(): Promise<void> {
@@ -189,6 +198,7 @@ export class ClaudeAgentSession implements AgentSession {
   private async run(): Promise<void> {
     this.running = true;
     this.closed = false;
+    this.tasks = 0;
     try {
       this.q = this.startQuery({
         prompt: this.input(),
@@ -213,6 +223,8 @@ export class ClaudeAgentSession implements AgentSession {
             if (msg.subtype === "init") {
               this.settings.sessionId = msg.session_id;
               this.opts.hooks.session(msg.session_id);
+            } else if (msg.subtype === "background_tasks_changed") {
+              this.tasks = msg.tasks.filter((task) => !task.ambient).length;
             }
             break;
 
@@ -262,6 +274,7 @@ export class ClaudeAgentSession implements AgentSession {
       if (this.turnActive) await this.finish(false, zeroUsage(), failure);
     } finally {
       this.running = false;
+      this.tasks = 0;
       this.q = null;
       clearPermissions(this.opts.threadId);
       if (!this.closed && this.pending.length) void this.run();

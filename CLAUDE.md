@@ -54,6 +54,9 @@ npm run codexify -- --dry-run    # same for a Codex thread
   next step — never interrupt a running turn to hand it over, and never add a
   queue in front of it. Anything that shuts a topic down (sweep, idle timeout)
   must go through `endSession`, or the child process is orphaned.
+  The idle timeout waits while Claude still has background tasks: each one
+  reports back by starting a turn, and a CLI whose stdin is closed runs that
+  turn with no way to reach `mcp__tg__send`.
   Codex's SDK has no steering API: input received mid-turn is consumed as the
   next turn, without interrupting the running one. Its subprocess is per-turn,
   but the same persisted thread id and in-memory topic object continue.
