@@ -509,6 +509,14 @@ async function handleCommand(
     return;
   }
 
+  if (cmd === "/compact") {
+    const t = await sessionTopic(ctx, thread);
+    if (!t) return;
+    const note = await sessionFor(bot, t).compact(args.trim());
+    if (note) await replySilently(ctx, note, { message_thread_id: thread });
+    return;
+  }
+
   if (cmd === "/provider") {
     const arg = args.split(/\s+/)[0];
     if (arg) {

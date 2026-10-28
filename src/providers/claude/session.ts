@@ -44,6 +44,10 @@ export class ClaudeAgentSession implements AgentSession {
   private quotaRejected = false;
   private quotaResetsAt: string | null = null;
   private tasks = 0;
+  // A /compact turn reports success only through its compact_boundary.
+  private compactTurn = false;
+  private compactDone = false;
+  private compactError: string | null = null;
 
   constructor(private opts: AgentSessionOptions, private startQuery = query) {
     this.settings = {
@@ -81,6 +85,18 @@ export class ClaudeAgentSession implements AgentSession {
     this.wake = null;
     if (!this.running) void this.run();
     await this.beginTurn();
+    return true;
+  }
+
+  async compact(instructions: string): Promise<boolean> {
+    if (this.closed || this.turnActive) return false;
+    this.quotaInput = null;
+    // Claude Code runs slash commands that arrive as prompt text.
+    this.pending.push(claudeMessage({ text: `/compact ${instructions}`.trim(), images: [] }));
+    this.wake?.();
+    this.wake = null;
+    if (!this.running) void this.run();
+    await this.beginTurn(true);
     return true;
   }
 
@@ -156,9 +172,12 @@ export class ClaudeAgentSession implements AgentSession {
     if (this.tasks) this.q?.close();
   }
 
-  private async beginTurn(): Promise<void> {
+  private async beginTurn(compact = false): Promise<void> {
     if (this.turnActive) return;
     this.turnActive = true;
+    this.compactTurn = compact;
+    this.compactDone = false;
+    this.compactError = null;
     this.stopped = false;
     this.stderr = "";
     this.apiFailure = null;
@@ -170,7 +189,7 @@ export class ClaudeAgentSession implements AgentSession {
 
   private async finish(ok: boolean, usage: Usage, failure: string | null): Promise<void> {
     const stopped = this.stopped;
-    this.quotaInput = !ok && !stopped && !this.closed && isQuotaFailure(failure)
+    this.quotaInput = !ok && !stopped && !this.compactTurn && !this.closed && isQuotaFailure(failure)
       ? this.settings.sessionId ? claudeMessage({ text: QUOTA_CONTINUATION, images: [] }) : this.lastInput
       : null;
     this.turnActive = false;
@@ -225,6 +244,16 @@ export class ClaudeAgentSession implements AgentSession {
               this.opts.hooks.session(msg.session_id);
             } else if (msg.subtype === "background_tasks_changed") {
               this.tasks = msg.tasks.filter((task) => !task.ambient).length;
+            } else if (msg.subtype === "status") {
+              if (msg.status === "compacting") this.opts.hooks.compacting?.();
+              else if (msg.compact_result === "failed") {
+                this.compactError = msg.compact_error ?? null;
+                this.opts.hooks.compacted?.({ ok: false, preTokens: null, postTokens: null });
+              }
+            } else if (msg.subtype === "compact_boundary") {
+              this.compactDone = true;
+              const meta = msg.compact_metadata;
+              this.opts.hooks.compacted?.({ ok: true, preTokens: meta.pre_tokens, postTokens: meta.post_tokens ?? null });
             }
             break;
 
@@ -239,6 +268,9 @@ export class ClaudeAgentSession implements AgentSession {
             }
             const text = said.join("");
             if (msg.error && !msg.parent_tool_use_id) this.apiFailure = text || String(msg.error);
+            // A command that can't run, like /compact on an empty session,
+            // answers with a synthetic message instead of an error result.
+            if (this.compactTurn && text.trim() && !msg.parent_tool_use_id) this.compactError ??= text.trim();
             if (text.trim() && !msg.parent_tool_use_id) this.opts.hooks.text(text);
             break;
           }
@@ -253,11 +285,13 @@ export class ClaudeAgentSession implements AgentSession {
           case "result": {
             this.settings.sessionId = msg.session_id;
             this.opts.hooks.session(msg.session_id);
-            const ok = msg.subtype === "success" && !msg.is_error && !this.apiFailure;
+            const compactFailure = this.compactTurn && !this.compactDone
+              ? this.compactError ?? "Compaction failed" : null;
+            const ok = msg.subtype === "success" && !msg.is_error && !this.apiFailure && !compactFailure;
             if (ok && typeof (msg as any).result === "string") {
               this.opts.hooks.text((msg as any).result);
             }
-            const detail = this.apiFailure ?? (msg.subtype === "success" ? msg.result : msg.errors.join("\n"));
+            const detail = this.apiFailure ?? compactFailure ?? (msg.subtype === "success" ? msg.result : msg.errors.join("\n"));
             const failure = !ok && !this.stopped
               ? `⚠️ ${this.quotaRejected ? "Subscription usage limit reached. " : ""}${detail || msg.subtype}` : null;
             await this.finish(ok, readUsage(msg), failure);

@@ -30,6 +30,8 @@ export class CodexAgentSession implements AgentSession {
   private capacityInput: CodexInput | null = null;
   private quotaInput: CodexInput | null = null;
   private inputVersion = 0;
+  /** Context size after the parent thread's latest model request, if seen in this process. */
+  private contextTokens: number | null = null;
 
   constructor(private opts: AgentSessionOptions, private server = new CodexAppServerClient()) {
     this.settings = {
@@ -121,6 +123,38 @@ export class CodexAgentSession implements AgentSession {
       await this.server.request("thread/unsubscribe", { threadId: sideId }).catch((err) => {
         console.warn(`[btw:${this.opts.threadId}] discarding side thread failed:`, String(err));
       });
+    }
+  }
+
+  /** Codex compacts on the server; `thread/compact/start` takes no instructions. */
+  async compact(): Promise<boolean> {
+    if (this.closed || this.running || this.turnActive) return false;
+    this.running = true;
+    void this.runCompact();
+    return true;
+  }
+
+  private async runCompact(): Promise<void> {
+    try {
+      await this.beginTurn();
+      const result = await this.runAppTurn(await this.ensureThread(), null, {
+        onTool: (name, input) => this.opts.hooks.tool(name, input),
+        deliverTelegram: true,
+      });
+      this.failure = result.failure;
+      this.sent = result.sent;
+      this.stopped = this.stopped || result.stopped;
+      await this.finish(result.ok, result.usage);
+    } catch (err) {
+      if (!this.stopped) {
+        this.failure = `❌ ${String(err)}`;
+        console.error(`[codex:${this.opts.threadId}] compaction failed:`, err);
+      }
+      if (this.turnActive) await this.finish(false, zeroUsage());
+    } finally {
+      this.running = false;
+      this.activeTurnId = null;
+      if (!this.closed && this.pending.length) void this.run();
     }
   }
 
@@ -276,7 +310,8 @@ export class CodexAgentSession implements AgentSession {
 
   private async runAppTurn(
     threadId: string,
-    input: CodexInput,
+    /** Null starts a compaction turn instead of a prompt. */
+    input: CodexInput | null,
     options: { onTool(name: string, input?: unknown): void | Promise<void>; deliverTelegram: boolean; onAccepted?(): void },
   ): Promise<AgentSideResult> {
     let turnId: string | null = null;
@@ -287,6 +322,7 @@ export class CodexAgentSession implements AgentSession {
     const tokens = new CodexResponseUsage();
     let failure: string | null = null;
     let sent = 0;
+    let compactPre: number | null = null;
     const deliveries: Promise<void>[] = [];
 
     let settle!: (result: AgentSideResult) => void;
@@ -315,13 +351,21 @@ export class CodexAgentSession implements AgentSession {
         turnId ??= params.turn.id;
         if (threadId === this.parentId) this.activeTurnId = turnId;
       } else if (event.method === "item/started") {
+        if (params.item?.type === "contextCompaction" && options.deliverTelegram) {
+          compactPre = this.contextTokens;
+          // Whatever token usage arrives before the item completes is the compacted size.
+          this.contextTokens = null;
+          this.opts.hooks.compacting?.();
+        }
         const name = appServerToolName(params.item);
         if (name) deliveries.push(Promise.resolve(options.onTool(name, params.item)).catch((err) => {
           console.warn("[toolcalls] delivery failed:", String(err));
         }));
       } else if (event.method === "item/completed") {
         const item = params.item;
-        if (item.type === "agentMessage" && item.delivery === "async" && item.questions?.length) {
+        if (item.type === "contextCompaction" && options.deliverTelegram) {
+          this.opts.hooks.compacted?.({ ok: true, preTokens: compactPre, postTokens: this.contextTokens });
+        } else if (item.type === "agentMessage" && item.delivery === "async" && item.questions?.length) {
           // Async questions use final_answer as their phase while the turn keeps
           // working. They must never enter the buffered final-answer fallback.
           if (options.deliverTelegram) deliveries.push(
@@ -376,6 +420,7 @@ export class CodexAgentSession implements AgentSession {
         }
       } else if (event.method === "thread/tokenUsage/updated") {
         const last = params.tokenUsage?.last;
+        if (options.deliverTelegram && last) this.contextTokens = last.totalTokens ?? null;
         if (last && tokens.add(
           appServerTokens(last),
           params.tokenUsage.total ? appServerTokens(params.tokenUsage.total) : undefined,
@@ -416,23 +461,28 @@ export class CodexAgentSession implements AgentSession {
       return true;
     });
     try {
-      const started = await this.server.request<{ turn: { id: string } }>("turn/start", {
-        threadId,
-        input: appServerInput(input),
-        model: this.settings.model ?? cfg.codexModel,
-        effort: this.settings.effort,
-        serviceTierForTurn: this.settings.serviceTier ?? "default",
-      });
-      turnId ??= started.turn.id;
-      options.onAccepted?.();
-      if (options.deliverTelegram) {
-        try {
-          recordCodexTurnTier(threadId, turnId, this.settings.serviceTier ?? "default");
-        } catch (err) {
-          console.warn(`[codex:${this.opts.threadId}] recording turn tier failed:`, String(err));
+      if (input) {
+        const started = await this.server.request<{ turn: { id: string } }>("turn/start", {
+          threadId,
+          input: appServerInput(input),
+          model: this.settings.model ?? cfg.codexModel,
+          effort: this.settings.effort,
+          serviceTierForTurn: this.settings.serviceTier ?? "default",
+        });
+        turnId ??= started.turn.id;
+        options.onAccepted?.();
+        if (options.deliverTelegram) {
+          try {
+            recordCodexTurnTier(threadId, turnId, this.settings.serviceTier ?? "default");
+          } catch (err) {
+            console.warn(`[codex:${this.opts.threadId}] recording turn tier failed:`, String(err));
+          }
         }
+      } else {
+        // The response is empty; the compaction turn's id arrives with turn/started.
+        await this.server.request("thread/compact/start", { threadId });
       }
-      if (!turnCompleted && threadId === this.parentId) this.activeTurnId = turnId;
+      if (!turnCompleted && threadId === this.parentId && turnId) this.activeTurnId = turnId;
       return await completed;
     } finally {
       off();

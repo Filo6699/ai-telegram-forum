@@ -4,6 +4,7 @@ import { statSync } from "node:fs";
 export const botCommands = [
   { command: "usage", description: "Tokens/cost here (or all in the launcher) + plan limits" },
   { command: "btw", description: "Ask a side question without interrupting the main task" },
+  { command: "compact", description: "Compact the context: /compact, or /compact <what to keep>" },
   { command: "provider", description: "Next session agent: Claude, Codex, or OpenRouter" },
   { command: "effort", description: "Reasoning effort: /effort high, or /effort for buttons" },
   { command: "progress", description: "Progress updates: off, brief, detailed" },

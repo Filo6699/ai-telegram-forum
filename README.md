@@ -211,6 +211,13 @@ remain commands.
   automatic retries globally. Works in the launcher and session topics.
 - `/btw <question>` — ask Claude or Codex a side question without interrupting
   the main task or adding the exchange to its history.
+- `/compact` — compact the session's context, like `/compact` in the CLI.
+  Claude takes optional instructions (`/compact keep the API decisions`);
+  Codex compacts without them. Neither reports progress, only start and end,
+  so the status line shows `🗜 compacting…` with the elapsed time, and the
+  summary shows the context size before and after (`🗜 152.3k→18.1k`).
+  Automatic compactions in the middle of a turn appear the same way. Codex
+  knows the size before only if this bot process saw an earlier turn.
 - `/usage` — show usage and available plan limits. In the launcher, show totals
   across retained topics. Codex token counts are read from native session logs,
   including spawned agents; adopted sessions include their terminal history.

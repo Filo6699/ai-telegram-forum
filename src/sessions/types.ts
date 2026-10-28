@@ -40,6 +40,13 @@ export interface AgentSideResult extends AgentTurnResult {
   answer: string;
 }
 
+/** One context compaction, manual or automatic. Token counts are context size, when known. */
+export interface CompactionResult {
+  ok: boolean;
+  preTokens: number | null;
+  postTokens: number | null;
+}
+
 export interface AgentSessionHooks {
   beginTurn(): Promise<void>;
   session(id: string): void;
@@ -47,6 +54,9 @@ export interface AgentSessionHooks {
   text(value: string): void;
   tool(name: string, input?: unknown): void | Promise<void>;
   endTurn(result: AgentTurnResult): Promise<void>;
+  /** The provider started compacting the context, by request or on its own. */
+  compacting?(): void;
+  compacted?(result: CompactionResult): void;
   /** Wait for a capacity retry decision after a failed main turn. */
   recoverCapacity?(failure: string, retries: number, canRetry: boolean): Promise<boolean>;
 }
@@ -68,6 +78,11 @@ export interface AgentSession {
   answerQuestion?(messageId: number, input: AgentInput): Promise<boolean>;
   btw(input: AgentInput, onTool: (name: string) => void): Promise<AgentSideResult>;
   interrupt(): Promise<boolean>;
+  /**
+   * Run a compaction turn through the usual turn hooks. False when a turn is
+   * already running. `instructions` steer the summary where the provider allows.
+   */
+  compact?(instructions: string): Promise<boolean>;
   /** Retry the last capacity failure if no newer user input has superseded it. */
   retryCapacity?(): Promise<boolean>;
   /** Continue a subscription-limited task if no newer input has superseded it. */

@@ -44,6 +44,7 @@ export class TurnStatus {
   private lastText = "";
   private timer: ReturnType<typeof setTimeout> | null = null;
   private done = false;
+  private phaseLabel: string | null = null;
 
   constructor(
     private out: TopicRenderer,
@@ -60,10 +61,10 @@ export class TurnStatus {
 
   /** Post the placeholder. Called as soon as the turn starts, so the topic reacts at once. */
   async start(): Promise<void> {
-    this.lastText = "⏳ …";
+    this.lastText = this.phaseLabel ? `⏳ … · ${this.phaseLabel}` : "⏳ …";
     this.messageId = await this.out.sendText(this.lastText, { silent: true });
     this.lastEditAt = Date.now();
-    if (this.detail) this.schedule();
+    if (this.detail || this.phaseLabel) this.schedule();
   }
 
   /** Record a tool call and refresh the line (throttled). */
@@ -71,6 +72,17 @@ export class TurnStatus {
     this.total++;
     this.counts.set(name, (this.counts.get(name) ?? 0) + 1);
     this.schedule();
+  }
+
+  /**
+   * Show what the turn is busy with when there is no tool call to show, such
+   * as a compaction. While a phase is set the elapsed time keeps ticking, at
+   * the same throttled rate, so a long silent step still looks alive.
+   */
+  phase(label: string | null): void {
+    this.phaseLabel = label;
+    // Before start() there is no message to edit; start() schedules instead.
+    if (this.messageId !== null) this.schedule();
   }
 
   /** Ask the live line to include newly available provider metadata. */
@@ -86,7 +98,8 @@ export class TurnStatus {
     const rest = this.counts.size - top.length;
     if (rest > 0) top.push(`+${rest}`);
     const tools = top.length ? ` · 🔧 ${top.join(", ")}` : "";
-    return `⏳ ${humanMs(this.elapsedMs)}${tools}${detail ? ` · ${detail}` : ""}`;
+    const phase = this.phaseLabel ? ` · ${this.phaseLabel}` : "";
+    return `⏳ ${humanMs(this.elapsedMs)}${tools}${phase}${detail ? ` · ${detail}` : ""}`;
   }
 
   /**
@@ -114,6 +127,12 @@ export class TurnStatus {
     }
     // The final summary may have landed while the provider lookup was pending.
     if (!this.done) await this.flush(this.liveText(detail));
+    if (this.phaseLabel) {
+      // An unchanged line skips the edit; count the tick anyway so the next
+      // one waits a full interval instead of firing straight away.
+      this.lastEditAt = Date.now();
+      this.schedule();
+    }
   }
 
   private async flush(text: string, waitMs = 0): Promise<void> {

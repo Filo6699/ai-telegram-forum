@@ -3,7 +3,7 @@ import { progressInstruction, toolcallText } from "../telegram/activity.ts";
 import type { Bot } from "grammy";
 import type { Usage } from "./usage.ts";
 import { createAgentSession } from "./factory.ts";
-import type { AgentInput, AgentSession, AgentTurnResult } from "./types.ts";
+import type { AgentInput, AgentSession, AgentTurnResult, CompactionResult } from "./types.ts";
 import { cfg } from "../config/env.ts";
 import {
   codexSummaryParts,
@@ -49,6 +49,8 @@ import { isQuotaFailure } from "./quota-retry.ts";
 
 export type { AgentInput } from "./types.ts";
 
+const COMPACTING = "🗜 compacting…";
+
 /** How long a session with background tasks may stay silent before it is closed anyway. */
 const BACKGROUND_HOLD_MS = 3 * 60 * 60_000;
 
@@ -87,6 +89,12 @@ export class TopicSession {
   private turnClaudeRatio: WeeklyRatio | null = null;
   private sideTurns = 0;
   private closed = false;
+
+  // Compaction: a /compact turn, and every compaction (manual or automatic) seen in a turn.
+  private compactRequested = false;
+  private turnCompact = false;
+  private compacting = false;
+  private turnCompactions: CompactionResult[] = [];
 
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private idleSince = 0;
@@ -142,6 +150,15 @@ export class TopicSession {
           if (text) await this.out.sendText(text);
         },
         endTurn: (result) => this.endTurn(result),
+        compacting: () => {
+          this.compacting = true;
+          this.status?.phase(COMPACTING);
+        },
+        compacted: (result) => {
+          this.compacting = false;
+          this.turnCompactions.push(result);
+          this.status?.phase(null);
+        },
         recoverCapacity: (failure, retries, canRetry) => this.closed ? Promise.resolve(false) : this.capacity.recover(
           failure, retries, canRetry && this.turnInputVersion === this.inputVersion,
         ),
@@ -320,6 +337,25 @@ export class TopicSession {
   }
 
   /**
+   * Compact the session's context as a turn of its own, with the usual status
+   * line and summary. Returns a note for the user when it can't start, or when
+   * it starts with a caveat; null when it simply started.
+   */
+  async compact(instructions: string): Promise<string | null> {
+    if (!this.agent.compact) return "⚠️ /compact isn't available for this provider.";
+    if (!this.sessionId) return "⚠️ Nothing to compact yet — send a message first.";
+    if (this.turnActive) return "⚠️ A turn is running. Wait for it to finish, or /stop it first.";
+    touch(this.threadId);
+    this.armIdleTimer();
+    this.compactRequested = true;
+    const started = await this.agent.compact(instructions);
+    this.compactRequested = false;
+    if (!started) return "⚠️ A turn is running. Wait for it to finish, or /stop it first.";
+    return instructions && this.provider === "codex"
+      ? "Codex compaction takes no instructions; compacting without them." : null;
+  }
+
+  /**
    * Abort only the running turn. Input already queued for later is preserved.
    * Returns false when there was nothing to interrupt.
    */
@@ -385,12 +421,17 @@ export class TopicSession {
     this.turnWeeklyBaseline = null;
     this.turnClaudeBaselineUsd = null;
     this.turnClaudeRatio = null;
+    this.turnCompact = this.compactRequested;
+    this.compactRequested = false;
+    this.compacting = false;
+    this.turnCompactions = [];
     if (this.provider === "claude") {
       this.turnClaudeRatio = claudeWeeklyRatio();
       this.turnClaudeBaselineUsd = this.sessionId ? claudeSessionUsd(this.sessionId) : 0;
     }
     this.out.clear();
     this.status = new TurnStatus(this.out, this.statusDetail());
+    if (this.turnCompact) this.status.phase(COMPACTING);
     await this.status.start();
     if (this.provider === "codex") {
       // runStreamed starts only after this hook resolves, so this snapshot
@@ -425,12 +466,19 @@ export class TopicSession {
         : null;
     this.status = null;
     this.turnActive = false;
+    const compactTurn = this.turnCompact;
+    // A compaction the turn never finished failed with it.
+    if (this.compacting) this.turnCompactions.push({ ok: false, preTokens: null, postTokens: null });
+    this.compacting = false;
+    const compactions = this.turnCompactions.map(compactionPart);
+    if (compactTurn && !compactions.length) compactions.push(result.ok ? "🗜 compacted" : "🗜 failed");
 
-    const quotaFailure = !result.ok && !result.stopped && !this.closed && this.provider !== "openrouter"
+    const quotaFailure = !compactTurn && !result.ok && !result.stopped && !this.closed && this.provider !== "openrouter"
       && this.turnInputVersion === this.inputVersion && isQuotaFailure(result.failure);
     // The agent stayed silent — fall back to whatever text the turn produced,
-    // rather than leaving the topic with nothing but a summary.
-    if (result.sent === 0 && !quotaFailure) await this.out.send();
+    // rather than leaving the topic with nothing but a summary. A compaction
+    // turn has no answer; its text is the CLI's own command output.
+    if (result.sent === 0 && !quotaFailure && !compactTurn) await this.out.send();
     else this.out.clear();
     if (quotaFailure) await this.quota.offer(result.failure!, result.quotaResetsAt);
     else {
@@ -441,12 +489,12 @@ export class TopicSession {
 
     addUsage(this.threadId, result.usage);
     if (this.sessionId) setSession(this.threadId, this.sessionId);
-    const extra =
+    const extra = [...compactions, ...(
       this.provider === "codex"
         ? await codexSummaryParts(this.sessionId, this.turnWeeklyBaseline, this.turnServiceTier)
         : this.provider === "claude"
           ? [this.claudeWeeklyPart()].filter((p): p is string => p !== null)
-          : [];
+          : [])];
     await status?.finish(
       summarize(
         result.ok && !result.failure,
@@ -502,6 +550,15 @@ export class TopicSession {
       console.warn(`[session] retitling topic ${this.threadId} failed:`, String(err));
     }
   }
+}
+
+/** `🗜 152.3k→18.1k` for one compaction; either size may be unknown. */
+function compactionPart(result: CompactionResult): string {
+  if (!result.ok) return "🗜 failed";
+  const { preTokens: pre, postTokens: post } = result;
+  if (pre !== null && post !== null) return `🗜 ${fmtTokens(pre)}→${fmtTokens(post)}`;
+  if (post !== null) return `🗜 →${fmtTokens(post)}`;
+  return "🗜 compacted";
 }
 
 /** The one line that replaces the live status when a turn ends. */
