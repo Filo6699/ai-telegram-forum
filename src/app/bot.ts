@@ -57,6 +57,7 @@ import { fetchPlanLimits } from "../providers/claude/limits.ts";
 import { claudeWeeklyCalibration, claudeWeeklyRatio } from "../providers/claude/weekly.ts";
 import { claudeCalibrationText, planLimitsText } from "../telegram/limits.ts";
 import { MediaGroupCollector } from "../telegram/media-group.ts";
+import { richText } from "../telegram/rich.ts";
 import { registerPermissionButtons } from "../telegram/permission.ts";
 import { registerCapacityButtons } from "../telegram/capacity.ts";
 import { registerQuotaButtons } from "../telegram/quota.ts";
@@ -945,7 +946,7 @@ async function route(
     ...contentOf(text, images),
     ...(parent ? { replyTo: {
       messageId: parent.message_id,
-      text: parent.text ?? parent.caption ?? "",
+      text: parent.text ?? parent.caption ?? richText(parent) ?? "",
     } } : {}),
   });
 }
@@ -960,7 +961,7 @@ bot.on("message", async (ctx, next) => {
   if (!mine(ctx)) return;
   if (ctx.message.media_group_id) return next();
   const parsed = parseCommand(
-    ctx.message.text ?? ctx.message.caption ?? "",
+    ctx.message.text ?? ctx.message.caption ?? richText(ctx.message) ?? "",
     botUsername,
     isLauncher(ctx.message.message_thread_id),
   );
@@ -973,6 +974,14 @@ bot.on("message", async (ctx, next) => {
 bot.on("message:text", async (ctx) => {
   if (!mine(ctx)) return;
   await route(ctx, ctx.message.text, []);
+});
+
+// Premium clients can send block-formatted messages that carry no `text`.
+bot.on("message", async (ctx, next) => {
+  if (!mine(ctx)) return;
+  const text = richText(ctx.message);
+  if (!text) return next();
+  await route(ctx, text, []);
 });
 
 /** Caption first, then what came with it: the caption is what titles a topic. */
