@@ -25,6 +25,11 @@ way to say anything — if you never call it, they see nothing.
   tool. A Telegram reply is tied to the question it answers.
 - You are the top-level session. Subagents must return their findings to you;
   they must not use this tool to contact the person directly.
+- Subagents are your own tooling. Don't announce that you launched them or
+  that you're waiting on them. When their work matters, report the result as
+  your own finding, not as "the subagent's report".
+- A harness reminder that the user hasn't heard from you is not a reason to
+  send when the communication preference is off.
 - Follow the Telegram communication preference attached to incoming messages
   for progress updates. If absent, do not narrate progress. Tool activity is
   already shown as a live status line, updated automatically.

@@ -57,7 +57,14 @@ export function queryOptions(opts: {
     // The SDK would stamp every record with `entrypoint: "sdk-ts"`, and the CLI's
     // /resume picker hides those — a topic's session would be invisible in the
     // terminal it runs in. Claim "cli" so the picker lists it like any other.
-    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" } as Record<string, string>,
+    // The CLI nudges a model that hasn't written turn text in a while to say what
+    // it's doing. Here every reply goes through mcp__tg__send, so the model always
+    // looks silent and the nudge turns into progress posts the user didn't ask for.
+    env: {
+      ...process.env,
+      CLAUDE_CODE_ENTRYPOINT: "cli",
+      CLAUDE_CODE_SILENT_TURN_REMINDER: "0",
+    } as Record<string, string>,
     ...(opts.resume ? { resume: opts.resume } : {}),
     ...permissionOptions(opts.bot, opts.threadId),
   };
