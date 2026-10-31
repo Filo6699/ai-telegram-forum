@@ -48,7 +48,10 @@ npm run codexify -- --dry-run    # same for a Codex thread
   Assistant text is still buffered, but only as the fallback for a turn that
   ended without the agent ever calling `send` — losing a reply the session
   recorded is the bug this design exists to prevent. Errors always get posted,
-  regardless of that fallback.
+  regardless of that fallback. One exception: a turn Claude Code started by
+  itself while background tasks still run ends on a status line ("Waiting for
+  the build"), so its text waits. It's posted only if the work winds down and
+  the agent still hasn't sent anything.
 - **A topic's session outlives its turns.** Claude's `TopicSession` feeds the SDK from an
   iterator that stays open, so an incoming message is delivered at the agent's
   next step — never interrupt a running turn to hand it over, and never add a

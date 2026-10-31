@@ -93,6 +93,11 @@ export class TopicSession {
   // Compaction: a /compact turn, and every compaction (manual or automatic) seen in a turn.
   private compactRequested = false;
   private turnCompact = false;
+  /**
+   * Fallback text from turns the CLI started while background tasks were still
+   * running. Posted only if the work winds down without the agent ever sending.
+   */
+  private deferredReply = "";
   private compacting = false;
   private turnCompactions: CompactionResult[] = [];
 
@@ -478,8 +483,21 @@ export class TopicSession {
     // The agent stayed silent — fall back to whatever text the turn produced,
     // rather than leaving the topic with nothing but a summary. A compaction
     // turn has no answer; its text is the CLI's own command output.
-    if (result.sent === 0 && !quotaFailure && !compactTurn) await this.out.send();
-    else this.out.clear();
+    if (result.sent === 0 && !quotaFailure && !compactTurn) {
+      if (result.awaitingTasks) {
+        // "Waiting for the build." The CLI will start another turn when the
+        // task reports back; hold the text until the work winds down.
+        if (!this.out.isEmpty) this.deferredReply = this.out.held;
+        this.out.clear();
+      } else {
+        if (this.out.isEmpty && this.deferredReply) this.out.hold(this.deferredReply);
+        this.deferredReply = "";
+        await this.out.send();
+      }
+    } else {
+      this.deferredReply = "";
+      this.out.clear();
+    }
     if (quotaFailure) await this.quota.offer(result.failure!, result.quotaResetsAt);
     else {
       this.quota.clear(result.ok ? "Task resumed." : "Turn ended.");

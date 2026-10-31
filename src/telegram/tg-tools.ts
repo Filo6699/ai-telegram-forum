@@ -30,6 +30,9 @@ way to say anything — if you never call it, they see nothing.
   your own finding, not as "the subagent's report".
 - A harness reminder that the user hasn't heard from you is not a reason to
   send when the communication preference is off.
+- When you end a turn to wait for background work, don't close it with a
+  status line like "Waiting for the build": a turn that never calls this tool
+  has its last text posted as a fallback.
 - Follow the Telegram communication preference attached to incoming messages
   for progress updates. If absent, do not narrate progress. Tool activity is
   already shown as a live status line, updated automatically.

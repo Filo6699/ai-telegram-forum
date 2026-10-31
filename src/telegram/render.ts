@@ -149,6 +149,10 @@ export class TopicRenderer {
     return this.buffer.trim().length === 0;
   }
 
+  get held(): string {
+    return this.buffer;
+  }
+
   /** Split raw markdown into <=RAW_CHUNK pieces without breaking code fences. */
   private chunkRaw(text: string, limit = RAW_CHUNK): string[] {
     const lines = text.split("\n");

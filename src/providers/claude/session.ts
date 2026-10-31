@@ -44,6 +44,9 @@ export class ClaudeAgentSession implements AgentSession {
   private quotaRejected = false;
   private quotaResetsAt: string | null = null;
   private tasks = 0;
+  // The CLI started this turn on its own, to hand back a background task's
+  // result; nobody in the topic asked anything.
+  private selfStarted = false;
   // A /compact turn reports success only through its compact_boundary.
   private compactTurn = false;
   private compactDone = false;
@@ -70,6 +73,8 @@ export class ClaudeAgentSession implements AgentSession {
   async send(input: AgentInput): Promise<void> {
     this.quotaInput = null;
     this.pending.push(claudeMessage(input));
+    // A message that lands mid-turn joins it, and the person now expects an answer.
+    this.selfStarted = false;
     this.wake?.();
     this.wake = null;
     if (!this.running) void this.run();
@@ -172,9 +177,10 @@ export class ClaudeAgentSession implements AgentSession {
     if (this.tasks) this.q?.close();
   }
 
-  private async beginTurn(compact = false): Promise<void> {
+  private async beginTurn(compact = false, selfStarted = false): Promise<void> {
     if (this.turnActive) return;
     this.turnActive = true;
+    this.selfStarted = selfStarted;
     this.compactTurn = compact;
     this.compactDone = false;
     this.compactError = null;
@@ -201,6 +207,7 @@ export class ClaudeAgentSession implements AgentSession {
       stopped,
       sent: this.opts.channel.sent,
       quotaResetsAt: this.quotaResetsAt,
+      awaitingTasks: ok && this.selfStarted && this.tasks > 0,
     });
   }
 
@@ -258,7 +265,9 @@ export class ClaudeAgentSession implements AgentSession {
             break;
 
           case "assistant": {
-            await this.beginTurn();
+            // Our own input begins its turn in send(), so a turn that opens
+            // here was started by the CLI.
+            await this.beginTurn(false, true);
             const said: string[] = [];
             for (const block of msg.message.content) {
               if (block.type === "text") said.push(block.text);

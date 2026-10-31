@@ -34,6 +34,11 @@ export interface AgentTurnResult {
   stopped: boolean;
   sent: number;
   resolvedModel?: string | null;
+  /**
+   * The provider started this turn by itself and still has background tasks
+   * that will start another. Its closing text is a status line, not an answer.
+   */
+  awaitingTasks?: boolean;
 }
 
 export interface AgentSideResult extends AgentTurnResult {
