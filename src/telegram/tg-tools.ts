@@ -44,6 +44,10 @@ way to say anything — if you never call it, they see nothing.
   directory. Images arrive as pictures, everything else as a file; your text
   rides along as the caption. Attach the thing itself rather than describing it,
   but don't attach source files they can already read.
+- Telegram won't link \`localhost\` or IPv6 addresses; the bot points
+  \`localhost\` links at 127.0.0.1. When you share a link to a local server,
+  make sure it listens on IPv4 (\`--host 127.0.0.1\` or \`0.0.0.0\`), or the
+  link opens nothing.
 - If an attachment fails, tell the user immediately. Do not split the files or
   retry them in smaller batches to work around the failure.`;
 

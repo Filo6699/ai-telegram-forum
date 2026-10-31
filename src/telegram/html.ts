@@ -17,6 +17,14 @@ export const escapeHtml = (s: string): string =>
 const isSafeUrl = (url: string): boolean => /^(https?:\/\/|tg:\/\/)/i.test(url);
 
 /**
+ * Telegram neither auto-links `localhost` nor accepts it in an href (the link is
+ * dropped silently), but it takes 127.0.0.1. Point the link there and leave the
+ * visible text as written.
+ */
+const linkableUrl = (url: string): string =>
+  url.replace(/^(https?:\/\/)localhost(?=[:/?#]|$)/i, "$1127.0.0.1");
+
+/**
  * Inline spans, applied to already-escaped text.
  *
  * Links and bare URLs are lifted out first: `https://a.co/_foo_bar_` is not
@@ -33,11 +41,15 @@ function inline(escaped: string): string {
     // [text](url) — the label still gets emphasis, so hold only the tags.
     .replace(/\[([^\]\n]*)\]\(([^)\s]+)\)/g, (m, label: string, url: string) =>
       isSafeUrl(url)
-        ? `${hold(`<a href="${url.replace(/"/g, "&quot;")}">`)}${label}${hold("</a>")}`
+        ? `${hold(`<a href="${linkableUrl(url).replace(/"/g, "&quot;")}">`)}${label}${hold("</a>")}`
         : m,
     )
-    // Bare URLs: Telegram auto-links them, we just keep them intact.
-    .replace(/(?:https?|tg):\/\/[^\s<>"']+/g, (m) => hold(m));
+    // Bare URLs: Telegram auto-links them, we just keep them intact — except
+    // localhost, which only links through an explicit href.
+    .replace(/(?:https?|tg):\/\/[^\s<>"']+/g, (m) => {
+      const href = linkableUrl(m);
+      return hold(href === m ? m : `<a href="${href}">${m}</a>`);
+    });
 
   return (
     text
