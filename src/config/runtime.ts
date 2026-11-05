@@ -15,6 +15,12 @@ export function buildConfig(settings: Settings, env: Record<string, string | und
     return value;
   }
 
+  function reqNumList(name: string): number[] {
+    const ids = req(name).split(",").map((part) => Number(part.trim()));
+    if (ids.some((id) => !Number.isFinite(id))) throw new Error(`${name} must be a comma-separated list of numbers`);
+    return ids;
+  }
+
   const openrouterModel = normalizeOpenRouterModel(settings.OPENROUTER_MODEL);
   if (!openrouterModel) throw new Error("config.json OPENROUTER_MODEL must be a model id or an openrouter.ai link");
   const openrouterApiKey = env.OPENROUTER_API_KEY?.trim() ?? "";
@@ -35,7 +41,7 @@ export function buildConfig(settings: Settings, env: Record<string, string | und
   return {
     token: req("BOT_TOKEN"),
     chatId: reqNum("FORUM_CHAT_ID"),
-    allowedUserId: reqNum("ALLOWED_USER_ID"),
+    allowedUserIds: reqNumList("ALLOWED_USER_ID"),
     launcherThreadId: settings.LAUNCHER_THREAD_ID === "General" ? undefined : settings.LAUNCHER_THREAD_ID,
     defaultCwd: settings.DEFAULT_CWD,
     projects: settings.PROJECTS,

@@ -14,7 +14,7 @@ export function registerQuotaButtons(
     if (!match) return next();
     const threadId = Number(match[1]);
     const message = ctx.callbackQuery.message;
-    if (ctx.from.id !== cfg.allowedUserId || message?.chat.id !== cfg.chatId || message.message_thread_id !== threadId) {
+    if (!cfg.allowedUserIds.includes(ctx.from.id) || message?.chat.id !== cfg.chatId || message.message_thread_id !== threadId) {
       await ctx.answerCallbackQuery({ text: "Not authorized." }).catch(() => {});
       return;
     }

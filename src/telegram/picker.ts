@@ -190,7 +190,7 @@ export function registerPickerButtons(bot: Bot): void {
   bot.on("callback_query:data", async (ctx, next) => {
     const m = /^p:([0-9a-f]{8}):([a-z]+)(?::(\d+))?$/.exec(ctx.callbackQuery.data);
     if (!m) return next();
-    if (ctx.from.id !== cfg.allowedUserId) {
+    if (!cfg.allowedUserIds.includes(ctx.from.id)) {
       return void ctx.answerCallbackQuery({ text: "Not authorized." }).catch(() => {});
     }
 

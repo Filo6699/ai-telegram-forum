@@ -175,7 +175,7 @@ export function registerPermissionButtons(bot: Bot): void {
   bot.on("callback_query:data", async (ctx) => {
     const m = /^p:([ads]):([0-9a-f]{8})$/.exec(ctx.callbackQuery.data);
     if (!m) return void ctx.answerCallbackQuery().catch(() => {});
-    if (ctx.from.id !== cfg.allowedUserId) {
+    if (!cfg.allowedUserIds.includes(ctx.from.id)) {
       return void ctx.answerCallbackQuery({ text: "Not authorized." }).catch(() => {});
     }
 

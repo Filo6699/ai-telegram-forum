@@ -691,7 +691,7 @@ function registerSessionCancelButtons(): void {
   bot.on("callback_query:data", async (ctx, next) => {
     const match = /^s:(\d+)$/.exec(ctx.callbackQuery.data);
     if (!match) return next();
-    if (ctx.from.id !== cfg.allowedUserId || ctx.callbackQuery.message?.chat.id !== cfg.chatId) {
+    if (!cfg.allowedUserIds.includes(ctx.from.id) || ctx.callbackQuery.message?.chat.id !== cfg.chatId) {
       return void ctx.answerCallbackQuery({ text: "Not authorized." }).catch(() => {});
     }
 
@@ -951,9 +951,9 @@ async function route(
   });
 }
 
-/** Single-user gate + right-forum check, shared by every message handler. */
+/** Allowed-user gate + right-forum check, shared by every message handler. */
 const mine = (ctx: any): boolean =>
-  ctx.from?.id === cfg.allowedUserId && ctx.chat.id === cfg.chatId;
+  cfg.allowedUserIds.includes(ctx.from?.id as number) && ctx.chat.id === cfg.chatId;
 
 // Consume slash commands before any text/media can reach an agent, allowing
 // cwd prefixes in the launcher. Albums are checked together below.
