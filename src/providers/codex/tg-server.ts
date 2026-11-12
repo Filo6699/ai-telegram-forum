@@ -31,6 +31,12 @@ server.registerTool(
         .array(z.string())
         .optional()
         .describe("Local paths to attach, relative to the working directory or absolute."),
+      notify: z
+        .boolean()
+        .optional()
+        .describe(
+          "Does the user need to look at this urgently? true = push notification with sound. Default false = silent delivery. Use true only for the final answer they are waiting for, a blocking question or an important warning.",
+        ),
     },
   },
   async () => accepted,

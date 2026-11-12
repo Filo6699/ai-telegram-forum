@@ -40,7 +40,11 @@ way to say anything — if you never call it, they see nothing.
   you just did. Markdown works — **bold**, \`code\`, and fenced code blocks.
 - Telegram has NO tables. Never send one: use a short list, \`Label: value\`
   lines, or a fenced code block if the columns really matter.
-- One call = one finished message = one notification on their phone. Batch related
+- Every message is silent (no sound, no vibration) unless you set \`notify: true\`.
+  Set it only when the person's attention is needed right now: the final answer
+  they are waiting for, a question you're blocked on, a warning. Leave it off
+  for interim findings, side results and anything that can wait until they look.
+- One call = one finished message. Batch related
   thoughts into a single call instead of firing several in a row.
 - You can attach local files with the \`files\` argument — screenshots, images,
   logs, PDFs, an artifact you just produced. Paths are relative to your working
@@ -67,6 +71,8 @@ export interface TgChannel {
 export interface TgSendArgs {
   text?: string;
   files?: string[];
+  /** Push-notify the user. Unset means a silent message. */
+  notify?: boolean;
 }
 
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
@@ -99,10 +105,11 @@ export async function runTgSend(
 ): Promise<ReturnType<typeof text> | ReturnType<typeof failure>> {
   const body = args.text ?? "";
   const paths = args.files ?? [];
+  const silent = !args.notify;
   if (!body.trim() && !paths.length) return failure("refused: empty message");
 
   if (!paths.length) {
-    const id = await out.sendText(body);
+    const id = await out.sendText(body, { silent });
     return id === null
       ? failure("delivery failed — Telegram rejected every rendering")
       : text(`sent (id: ${id})`);
@@ -110,7 +117,7 @@ export async function runTgSend(
 
   const { files, errors } = resolveOutgoing(cwd, paths);
   if (!files.length) {
-    const id = body.trim() ? await out.sendText(body) : null;
+    const id = body.trim() ? await out.sendText(body, { silent }) : null;
     return failure(
       `no file could be attached:\n${errors.join("\n")}` +
         (id !== null ? "\n(the text was sent on its own)" : "") +
@@ -119,9 +126,9 @@ export async function runTgSend(
     );
   }
 
-  const { ids, captioned, failed } = await out.sendMedia(files, body);
+  const { ids, captioned, failed } = await out.sendMedia(files, body, silent);
   if (body.trim() && !captioned) {
-    const id = await out.sendText(body);
+    const id = await out.sendText(body, { silent });
     if (id !== null) ids.push(id);
   }
   const notes = [...errors, ...failed.map((f) => `${f.path}: upload rejected`)];
@@ -172,6 +179,12 @@ export function createTgChannel(out: TopicRenderer, cwd: string): TgChannel {
             .optional()
             .describe(
               "Local paths to attach, relative to your working directory or absolute. Images and video are shown inline, anything else is sent as a file. Max 50 MB each.",
+            ),
+          notify: z
+            .boolean()
+            .optional()
+            .describe(
+              "Does the user need to look at this urgently? true = push notification with sound. Default false = silent delivery. Use true only for the final answer they are waiting for, a blocking question or an important warning.",
             ),
         },
         async (args) => {

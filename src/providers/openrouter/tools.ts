@@ -125,6 +125,11 @@ export const OPENROUTER_TOOLS: OpenRouterTool[] = [
         properties: {
           text: stringProperty("Finished Markdown message, without tables."),
           files: { type: "array", items: { type: "string" }, description: "Local files to attach." },
+          notify: {
+            type: "boolean",
+            description:
+              "Does the user need to look at this urgently? true = push notification with sound. Default false = silent. Use true only for the final answer they are waiting for, a blocking question or an important warning.",
+          },
         },
         additionalProperties: false,
       },

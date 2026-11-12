@@ -262,6 +262,7 @@ export class TopicRenderer {
   private async postAlbum(
     group: OutgoingFile[],
     cap: { text: string; mode: Mode } | null,
+    silent: boolean,
   ): Promise<number[]> {
     // InputFile is built fresh per attempt — a retry must not reuse a stream
     // the failed send already read.
@@ -272,7 +273,11 @@ export class TopicRenderer {
     if (group.length === 1) {
       const { path, kind } = group[0]!;
       const file = new InputFile(path);
-      const opts = { message_thread_id: this.threadId, ...capOpts };
+      const opts = {
+        message_thread_id: this.threadId,
+        ...(silent ? { disable_notification: true } : {}),
+        ...capOpts,
+      };
       const api = this.api;
       const sent =
         kind === "photo"
@@ -295,6 +300,7 @@ export class TopicRenderer {
     }));
     const sent = await this.api.sendMediaGroup(this.chatId, media as never, {
       message_thread_id: this.threadId,
+      ...(silent ? { disable_notification: true } : {}),
     });
     return sent.map((m) => m.message_id);
   }
@@ -307,6 +313,7 @@ export class TopicRenderer {
   async sendMedia(
     files: OutgoingFile[],
     raw: string,
+    silent = false,
   ): Promise<{ ids: number[]; captioned: boolean; failed: OutgoingFile[] }> {
     const ids: number[] = [];
     const failed: OutgoingFile[] = [];
@@ -328,7 +335,7 @@ export class TopicRenderer {
       let posted = false;
       for (const cap of caps) {
         try {
-          ids.push(...(await this.postAlbum(group, cap)));
+          ids.push(...(await this.postAlbum(group, cap, silent)));
           if (cap) captioned = true;
           posted = true;
           break;
