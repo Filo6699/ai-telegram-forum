@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { resolveLaunchRequest } from "../src/sessions/launch-request.ts";
+import { splitText } from "../src/shared/fmt.ts";
 import {
   claimLaunches,
   enqueueLaunch,
@@ -84,4 +85,15 @@ test("launch requests name a real folder and one way to pick settings", () => {
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
+});
+
+test("long queued prompts are echoed whole, split at line breaks", () => {
+  assert.deepEqual(splitText("short", 10), ["short"]);
+  assert.deepEqual(splitText("", 10), [""]);
+  assert.deepEqual(splitText("aaaa\nbbbb\ncccc", 9), ["aaaa\nbbbb", "cccc"]);
+  assert.deepEqual(splitText("aaaaaaaaaaaa\nbb", 5), ["aaaaa", "aaaaa", "aa\nbb"]);
+  const prompt = Array.from({ length: 300 }, (_, i) => `line ${i} ${"x".repeat(40)}`).join("\n");
+  const parts = splitText(prompt, 4000);
+  assert.ok(parts.every((part) => part.length <= 4000));
+  assert.equal(parts.join("\n"), prompt);
 });

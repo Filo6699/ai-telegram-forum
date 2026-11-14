@@ -51,7 +51,7 @@ import {
   serviceTierGroup,
   serviceTierLabel,
 } from "../config/service-tier.ts";
-import { fmtTokens } from "../shared/fmt.ts";
+import { fmtTokens, splitText } from "../shared/fmt.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { fetchPlanLimits } from "../providers/claude/limits.ts";
 import { claudeWeeklyCalibration, claudeWeeklyRatio } from "../providers/claude/weekly.ts";
@@ -824,8 +824,8 @@ async function startSession(tid: number, cwd: string, choice: LaunchChoice, inpu
   }).send(input);
 }
 
-/** Under Telegram's 4096-character cap; a longer prompt is echoed cut short. */
-const MAX_QUEUED_ECHO = 4_000;
+/** Telegram caps a message at 4096 characters; a longer prompt is echoed in parts. */
+const QUEUED_ECHO_PART = 4_000;
 
 /**
  * Start a launch another program queued (see `app/launch-queue.ts`). Resolves
@@ -841,14 +841,18 @@ async function launchQueued({ prompt, cwd, title, choice }: ResolvedLaunch): Pro
         disable_notification: true,
       })
       .catch((err) => console.warn("[queue] posting the launch line failed:", String(err)));
-    const echo = prompt.length > MAX_QUEUED_ECHO ? `${prompt.slice(0, MAX_QUEUED_ECHO)}…` : prompt;
-    await bot.api
-      .sendMessage(cfg.chatId, echo, {
-        message_thread_id: tid,
-        disable_notification: true,
-        reply_markup: cancelTurnKeyboard(tid),
-      })
-      .catch((err) => console.warn(`[queue] echoing the prompt into ${tid} failed:`, String(err)));
+    // The whole prompt, so the topic shows exactly what the agent was given.
+    // The stop button rides on the last part, under the end of the prompt.
+    const parts = splitText(prompt, QUEUED_ECHO_PART);
+    for (const [index, part] of parts.entries()) {
+      await bot.api
+        .sendMessage(cfg.chatId, part, {
+          message_thread_id: tid,
+          disable_notification: true,
+          ...(index === parts.length - 1 ? { reply_markup: cancelTurnKeyboard(tid) } : {}),
+        })
+        .catch((err) => console.warn(`[queue] echoing the prompt into ${tid} failed:`, String(err)));
+    }
     await startSession(tid, cwd, choice, contentOf(prompt, []));
   })().catch(async (err) => {
     console.error(`[queue] starting the session in ${tid} failed:`, err);

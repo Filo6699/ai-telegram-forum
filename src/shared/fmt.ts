@@ -49,3 +49,28 @@ export function formatWeeklyPercent(percent: number): string {
   if (percent < 10) return `${percent.toFixed(1)}%`;
   return `${Math.round(percent)}%`;
 }
+
+/**
+ * Cut plain text into pieces of at most `limit` characters, at line breaks
+ * where possible. A single longer line is cut where the limit falls.
+ */
+export function splitText(text: string, limit: number): string[] {
+  const pieces: string[] = [];
+  let cur = "";
+  for (const line of text.split("\n")) {
+    const next = cur ? `${cur}\n${line}` : line;
+    if (next.length <= limit) {
+      cur = next;
+      continue;
+    }
+    if (cur) pieces.push(cur);
+    let rest = line;
+    while (rest.length > limit) {
+      pieces.push(rest.slice(0, limit));
+      rest = rest.slice(limit);
+    }
+    cur = rest;
+  }
+  if (cur || !pieces.length) pieces.push(cur);
+  return pieces;
+}
