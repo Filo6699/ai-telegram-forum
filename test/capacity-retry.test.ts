@@ -323,16 +323,16 @@ test("capacity buttons authenticate user/chat/topic, pass unknown callbacks and 
     calls++;
     await new Promise<void>(resolve => { release = resolve; });
   });
-  const ctx = (user = cfg.allowedUserId, chat = cfg.chatId, thread = h.threadId, data = `cap:${h.threadId}:settings`) => ({
+  const ctx = (user = cfg.allowedUserIds[0], chat = cfg.chatId, thread = h.threadId, data = `cap:${h.threadId}:settings`) => ({
     from: { id: user }, callbackQuery: { data, message: { chat: { id: chat }, message_thread_id: thread, message_id: 1 } },
     async answerCallbackQuery() {},
   });
-  for (const invalid of [ctx(-1), ctx(cfg.allowedUserId, -1), ctx(cfg.allowedUserId, cfg.chatId, -1)]) {
+  for (const invalid of [ctx(-1), ctx(cfg.allowedUserIds[0], -1), ctx(cfg.allowedUserIds[0], cfg.chatId, -1)]) {
     await handler(invalid, () => assert.fail("must own capacity callbacks"));
   }
   assert.equal(calls, 0);
   let passed = false;
-  await handler(ctx(cfg.allowedUserId, cfg.chatId, h.threadId, "s:1"), () => { passed = true; });
+  await handler(ctx(cfg.allowedUserIds[0], cfg.chatId, h.threadId, "s:1"), () => { passed = true; });
   assert.equal(passed, true);
   await handler(ctx(), () => {});
   await until(() => calls === 1);
@@ -384,7 +384,7 @@ test("recovery model pickers require confirmation and cancel on timeout without 
   registerPickerButtons(bot);
   const group = { key: "m", options: [{ value: "model-a", label: "A" }, { value: "model-b", label: "B" }],
     perRow: 2, initial: "model-a", fallback: "model-a", summary: (v: string | null) => `Model: ${v}` };
-  const press = async (data: string) => handler({ from: { id: cfg.allowedUserId }, callbackQuery: { data }, api: bot.api,
+  const press = async (data: string) => handler({ from: { id: cfg.allowedUserIds[0] }, callbackQuery: { data }, api: bot.api,
     async answerCallbackQuery() {} }, () => assert.fail("picker must own callback"));
   for (const requireConfirm of [true, false]) {
     const picker = askPick(bot, { threadId: h.threadId, title: "Model", groups: [group], requireConfirm });

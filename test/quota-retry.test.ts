@@ -18,6 +18,8 @@ async function until(condition: () => boolean) {
   for (let n = 0; n < 100; n++) { if (condition()) return; await tick(); }
   assert.fail("condition was not reached");
 }
+// The first limits check runs in the background; the 20-minute timer is armed once it returns.
+const armed = (h: { recovery: QuotaRecovery }) => until(() => (h.recovery as any).timer !== null);
 const limits = (percent: number, reset = Date.now() + 5 * 60 * 60_000): PlanLimits => ({
   subscription: "test", windows: [{ label: "5h", utilization: percent, resetsAt: new Date(reset).toISOString() }],
 });
@@ -83,17 +85,15 @@ test("all applicable quota windows must recover; unrelated model limits do not b
   assert.equal(quotaStatus({ subscription: null, windows: [{ label: "unknown", utilization: null, resetsAt: "bad" }] }).ready, false);
 });
 
-test("wait is opt-in; free checks every 20 minutes detect early quota recovery", async t => {
+test("waiting is on by default; free checks every 20 minutes detect early quota recovery", async t => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
   const h = harness();
   t.after(() => h.recovery.clear("closed"));
   await h.recovery.offer(failure);
-  assert.match(h.messages[0]!.options.reply_markup.inline_keyboard[0][0].text, /Wait and retry/);
-  t.mock.timers.tick(QUOTA_CHECK_MS * 2);
-  assert.equal(h.reads, 0);
-  await h.recovery.start(1);
-  await h.recovery.start(1);
+  assert.equal(h.recovery.pending, true);
+  assert.deepEqual(h.messages[0]!.options.reply_markup.inline_keyboard[0].map((b: any) => b.text), ["⏹ Stop"]);
   assert.equal(h.reads, 1);
+  await armed(h);
   t.mock.timers.tick(QUOTA_CHECK_MS);
   await until(() => h.reads === 2);
   assert.equal(h.retries, 0);
@@ -110,7 +110,7 @@ test("reported reset wakes sooner than 20 minutes, even if the account snapshot 
   t.after(() => h.recovery.clear("closed"));
   h.snapshot = limits(100, Date.now() + 90_000);
   await h.recovery.offer(failure);
-  await h.recovery.start(1);
+  await armed(h);
   t.mock.timers.tick(89_999);
   await tick();
   assert.equal(h.retries, 0);
@@ -124,7 +124,7 @@ test("a newly postponed reset prevents retrying; both exhausted windows must rec
   t.after(() => h.recovery.clear("closed"));
   h.snapshot = limits(100, Date.now() + 60_000);
   await h.recovery.offer(failure);
-  await h.recovery.start(1);
+  await armed(h);
   h.snapshot = limits(100, Date.now() + 10 * QUOTA_CHECK_MS);
   t.mock.timers.tick(60_000);
   await until(() => h.reads === 2);
@@ -138,17 +138,18 @@ test("a newly postponed reset prevents retrying; both exhausted windows must rec
   assert.equal(h.retries, 0);
 });
 
-test("unavailable limits use 20-minute attempts; repeat exhaustion keeps the opt-in active", async t => {
+test("unavailable limits use 20-minute attempts; repeat exhaustion keeps the wait active", async t => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
   const h = harness();
   t.after(() => h.recovery.clear("closed"));
   h.onRead = async () => { throw new Error("usage endpoint unavailable"); };
   h.onRetry = async () => { await h.recovery.offer(failure); return true; };
   await h.recovery.offer(failure);
-  await h.recovery.start(1);
+  await armed(h);
   assert.equal(h.retries, 0);
   t.mock.timers.tick(QUOTA_CHECK_MS);
   await until(() => h.retries === 1 && h.reads === 3);
+  await armed(h);
   await tick();
   assert.equal(h.recovery.pending, true);
   t.mock.timers.tick(QUOTA_CHECK_MS);
@@ -162,7 +163,7 @@ test("native reset hints are used when usage reads return no windows", async t =
   t.after(() => h.recovery.clear("closed"));
   h.snapshot = null;
   await h.recovery.offer(failure, new Date(Date.now() + 45_000).toISOString());
-  await h.recovery.start(1);
+  await armed(h);
   t.mock.timers.tick(45_000);
   await until(() => h.retries === 1);
 });
@@ -171,12 +172,11 @@ test("stop invalidates an in-flight account read and prevents late retry", async
   const h = harness();
   let release!: (limits: PlanLimits | null) => void;
   h.onRead = () => new Promise(resolve => { release = resolve; });
-  await h.recovery.offer(failure);
-  const starting = h.recovery.start(1);
+  const offering = h.recovery.offer(failure);
   await until(() => Boolean(release));
   assert.equal(h.recovery.clear("stopped"), true);
   release(limits(0));
-  await starting;
+  await offering;
   assert.equal(h.retries, 0);
   assert.equal(h.recovery.pending, false);
   assert.equal(h.recovery.owns(1), false);
@@ -266,7 +266,6 @@ test("quota topic wiring cancels waits on stop, new input, or close and protects
     await until(() => server.starts.length === 1);
     server.complete();
     await until(() => h.messages.length === 1);
-    await topic.quota.start(1);
     t.mock.timers.tick(cfg.sessionIdleMs);
     assert.equal((topic as any).closed, false);
     if (action === "stop") assert.equal(await topic.interrupt(), true);
@@ -293,16 +292,16 @@ test("quota callbacks authenticate user/chat/topic, pass unknown callbacks, and 
     calls++;
     await new Promise<void>(resolve => { release = resolve; });
   });
-  const ctx = (user = cfg.allowedUserId, chat = cfg.chatId, thread = h.threadId, data = `quota:${h.threadId}:wait`) => ({
+  const ctx = (user = cfg.allowedUserIds[0], chat = cfg.chatId, thread = h.threadId, data = `quota:${h.threadId}:wait`) => ({
     from: { id: user }, callbackQuery: { data, message: { chat: { id: chat }, message_thread_id: thread, message_id: 1 } },
     async answerCallbackQuery() {},
   });
-  for (const invalid of [ctx(-1), ctx(cfg.allowedUserId, -1), ctx(cfg.allowedUserId, cfg.chatId, -1)]) {
+  for (const invalid of [ctx(-1), ctx(cfg.allowedUserIds[0], -1), ctx(cfg.allowedUserIds[0], cfg.chatId, -1)]) {
     await handler(invalid, () => assert.fail("owned callback"));
   }
   assert.equal(calls, 0);
   let passed = false;
-  await handler(ctx(cfg.allowedUserId, cfg.chatId, h.threadId, "other"), () => { passed = true; });
+  await handler(ctx(cfg.allowedUserIds[0], cfg.chatId, h.threadId, "other"), () => { passed = true; });
   assert.equal(passed, true);
   await handler(ctx(), () => {});
   await until(() => calls === 1);
@@ -313,6 +312,7 @@ test("topic endTurn renders quota errors once with recovery buttons and clears t
   const h = harness("claude");
   const topic = new TopicSession(h.bot, h.threadId, "/tmp", null, "claude");
   t.after(() => topic.close());
+  (topic.quota as any).readLimits = async () => limits(100);
   (topic as any).out.hold(failure);
   const result: AgentTurnResult = { ok: false, failure, stopped: false, sent: 0, usage: { inTokens: 0, outTokens: 0, costUsd: null } };
   await (topic as any).endTurn(result);

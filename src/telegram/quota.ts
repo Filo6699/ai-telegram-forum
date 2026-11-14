@@ -29,7 +29,7 @@ export function registerQuotaButtons(
   });
 }
 
-/** Opt-in recovery. Account reads are free; only a recovered/unknown quota starts a turn. */
+/** Default-on recovery. Account reads are free; only a recovered/unknown quota starts a turn. */
 export class QuotaRecovery {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private messageId: number | null = null;
@@ -61,10 +61,15 @@ export class QuotaRecovery {
     const hint = Date.parse(resetsAt ?? "");
     this.resetHint = Number.isFinite(hint) ? hint : null;
     this.eligible = true;
-    this.state = this.enabled ? "Waiting for subscription limits to recover. Checking every 20 minutes."
-      : "Wait for subscription limits to recover, then continue this task automatically. Checks every 20 minutes and at the reported reset time.";
+    // Waiting is the default: the task resumes on its own once the limits recover.
+    this.enabled = true;
+    this.state = "Waiting for subscription limits to recover. Checking every 20 minutes and at the reported reset time.";
     await this.render();
-    if (generation === this.generation && this.enabled) await this.check(false);
+    // Read in the background so the failed turn is not held up by the limits request.
+    // allowRetry stays false: a quota rejection right after a retry waits instead of looping.
+    if (generation === this.generation && this.enabled) {
+      void this.check(false).catch(err => console.warn("[quota] scheduled check failed:", String(err)));
+    }
   }
 
   async start(messageId: number): Promise<void> {
@@ -139,9 +144,7 @@ export class QuotaRecovery {
   private async render(): Promise<void> {
     const generation = this.generation;
     const text = `${this.failure}\n\n${this.state}`;
-    const kb = new InlineKeyboard();
-    if (!this.enabled) kb.text("⏳ Wait and retry", `quota:${this.threadId}:wait`);
-    kb.text("⏹ Stop", `quota:${this.threadId}:stop`);
+    const kb = new InlineKeyboard().text("⏹ Stop", `quota:${this.threadId}:stop`);
     this.edits = this.edits.then(async () => {
       if (generation !== this.generation) return;
       if (this.messageId === null) {

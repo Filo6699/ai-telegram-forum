@@ -271,13 +271,14 @@ picker pauses the wait; **Change model** uses the same model/preset choices as
 that model picker resumes the previous retry policy. Session shutdown or a bot
 restart cancels pending retries; the saved global duration remains.
 
-When **Claude or Codex subscription usage limits** are exhausted, the error
-message offers **Wait and retry**. This is separate from model-capacity retries
-and starts only after you press the button. The bot checks the provider's account
-limits every **20 minutes** and at the reported reset time, so an early reset
-can resume the task too. If both the 5-hour and weekly windows are exhausted,
-it waits until both recover. Model-specific windows apply only to the selected
-model. Account checks do not consume a model turn.
+When **Claude or Codex subscription usage limits** are exhausted, the bot waits
+for them to recover by default; no button press is needed. The error message
+shows the wait and a **Stop** button. This is separate from model-capacity
+retries. The bot checks the provider's account limits every **20 minutes** and
+at the reported reset time, so an early reset can resume the task too. If both
+the 5-hour and weekly windows are exhausted, it waits until both recover.
+Model-specific windows apply only to the selected model. Account checks do not
+consume a model turn.
 
 Once quota is available, the bot continues in the **same native session**.
 Accepted requests continue from their existing history; requests rejected before
