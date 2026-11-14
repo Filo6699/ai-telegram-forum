@@ -117,6 +117,9 @@ for (const col of [
   "openrouter_settings TEXT",
   "provider TEXT NOT NULL DEFAULT 'claude'",
   "source_session_id TEXT",
+  "cum_in INTEGER",
+  "cum_out INTEGER",
+  "cum_cost REAL",
 ]) {
   try {
     db.exec(`ALTER TABLE topics ADD COLUMN ${col}`);
@@ -167,6 +170,18 @@ const stmts = {
            cost_known = CASE WHEN ? IS NULL THEN 0 ELSE cost_known END
      WHERE thread_id = ?`,
   ),
+  addClaudeUsage: db.prepare(
+    `UPDATE topics
+       SET turns = turns + 1,
+           in_tokens = CASE WHEN cum_in IS NULL THEN :in WHEN :in >= cum_in THEN in_tokens + :in - cum_in ELSE in_tokens + :in END,
+           out_tokens = CASE WHEN cum_out IS NULL THEN :out WHEN :out >= cum_out THEN out_tokens + :out - cum_out ELSE out_tokens + :out END,
+           cost_usd = CASE WHEN cum_cost IS NULL THEN :cost WHEN :cost >= cum_cost THEN cost_usd + :cost - cum_cost ELSE cost_usd + :cost END,
+           cum_in = :in,
+           cum_out = :out,
+           cum_cost = :cost
+     WHERE thread_id = :id`,
+  ),
+  bumpTurn: db.prepare("UPDATE topics SET turns = turns + 1 WHERE thread_id = ?"),
   totals: db.prepare(
     `SELECT COUNT(*) AS topics,
             COALESCE(SUM(turns), 0) AS turns,
@@ -407,6 +422,14 @@ export function setSetting(key: string, value: string): void {
 }
 
 export function addUsage(threadId: number, u: Usage): void {
+  if (u.cumulative) {
+    if (u.costUsd === null || (!u.inTokens && !u.outTokens && !u.costUsd)) {
+      stmts.bumpTurn.run(threadId);
+      return;
+    }
+    stmts.addClaudeUsage.run({ in: u.inTokens, out: u.outTokens, cost: u.costUsd, id: threadId });
+    return;
+  }
   stmts.addUsage.run(u.inTokens, u.outTokens, u.costUsd, u.costUsd, threadId);
 }
 

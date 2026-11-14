@@ -70,7 +70,7 @@ export function queryOptions(opts: {
   };
 }
 
-/** Sum per-model usage; used when the result's flat `usage` comes back empty. */
+/** Sum per-model usage; `modelUsage` is the session's running total across every model call. */
 function usageFromModels(modelUsage: Record<string, any> | undefined) {
   const acc = { inTokens: 0, outTokens: 0 };
   for (const u of Object.values(modelUsage ?? {})) {
@@ -83,21 +83,13 @@ function usageFromModels(modelUsage: Record<string, any> | undefined) {
   return acc;
 }
 
-/** Pull a turn's cost out of a `result` message, whichever shape it arrived in. */
+/** Pull the session's running totals out of a `result` message; the caller turns them into a per-turn delta. */
 export function readUsage(msg: any): Usage {
-  const u = msg.usage ?? {};
-  const usage: Usage = {
-    inTokens:
-      (u.input_tokens ?? 0) +
-      (u.cache_read_input_tokens ?? 0) +
-      (u.cache_creation_input_tokens ?? 0),
-    outTokens: u.output_tokens ?? 0,
+  const m = usageFromModels(msg.modelUsage);
+  return {
+    inTokens: m.inTokens,
+    outTokens: m.outTokens,
     costUsd: typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : null,
+    cumulative: true,
   };
-  if (!usage.inTokens && !usage.outTokens) {
-    const m = usageFromModels(msg.modelUsage);
-    usage.inTokens = m.inTokens;
-    usage.outTokens = m.outTokens;
-  }
-  return usage;
 }
