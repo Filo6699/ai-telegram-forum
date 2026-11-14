@@ -71,6 +71,8 @@ import {
   type Provider,
 } from "../config/provider.ts";
 import { startSweep } from "./sweep.ts";
+import { startLaunchQueue } from "./launch-queue.ts";
+import type { ResolvedLaunch } from "../sessions/launch-request.ts";
 import {
   createTopic,
   getTopic,
@@ -768,6 +770,94 @@ async function chooseFolder(missing: string, title: string): Promise<string | nu
   return cancelled ? null : (picks.f ?? folders[0]!.cwd);
 }
 
+/** Create the forum topic for a launch and record it. Returns its thread id. */
+async function openTopic(title: string, cwd: string, choice: LaunchChoice, toolcalls: Toolcalls): Promise<number> {
+  const { provider, settings } = choice;
+  let topic;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      topic = await bot.api.createForumTopic(cfg.chatId, title);
+      break;
+    } catch (err) {
+      if (!(err instanceof HttpError) || attempt >= TOPIC_CREATE_ATTEMPTS) throw err;
+      console.warn(
+        `[launch] createForumTopic failed; retry ${attempt}/${TOPIC_CREATE_ATTEMPTS - 1} ` +
+          `in ${TOPIC_CREATE_RETRY_DELAY_MS}ms:`,
+        String(err),
+      );
+      await delay(TOPIC_CREATE_RETRY_DELAY_MS);
+    }
+  }
+  const tid = topic.message_thread_id;
+  createTopic({
+    threadId: tid,
+    cwd,
+    title,
+    provider,
+    effort: settings.effort,
+    model: settings.model,
+    serviceTier: settings.serviceTier,
+    openrouterSettings: settings.openrouter,
+  });
+  setActivity(tid, "progress", defaultProgress);
+  setActivity(tid, "toolcalls", toolcalls);
+  return tid;
+}
+
+/** The launcher's record of a started session. */
+const launchLine = (title: string, cwd: string, { provider, settings, preset }: LaunchChoice): string =>
+  `→ «${title}»  (cwd: ${cwd})  ${providerIcon(provider)} ${providerLabel(provider)} · ` +
+  (preset ?? settingsLine(provider, settings));
+
+/** Hand the first prompt to a freshly opened topic's agent. */
+async function startSession(tid: number, cwd: string, choice: LaunchChoice, input: AgentInput): Promise<void> {
+  const { provider, settings } = choice;
+  await sessionFor(bot, {
+    thread_id: tid,
+    cwd,
+    session_id: null,
+    provider,
+    effort: settings.effort,
+    model: settings.model,
+    service_tier: settings.serviceTier,
+    openrouter_settings: settings.openrouter,
+  }).send(input);
+}
+
+/** Under Telegram's 4096-character cap; a longer prompt is echoed cut short. */
+const MAX_QUEUED_ECHO = 4_000;
+
+/**
+ * Start a launch another program queued (see `app/launch-queue.ts`). Resolves
+ * once the topic exists; failures after that point are reported in the topic,
+ * so the queue never opens the same request twice.
+ */
+async function launchQueued({ prompt, cwd, title, choice }: ResolvedLaunch): Promise<void> {
+  const tid = await openTopic(title, cwd, choice, "off");
+  void (async () => {
+    await bot.api
+      .sendMessage(cfg.chatId, `⏰ ${launchLine(title, cwd, choice)}`, {
+        message_thread_id: cfg.launcherThreadId,
+        disable_notification: true,
+      })
+      .catch((err) => console.warn("[queue] posting the launch line failed:", String(err)));
+    const echo = prompt.length > MAX_QUEUED_ECHO ? `${prompt.slice(0, MAX_QUEUED_ECHO)}…` : prompt;
+    await bot.api
+      .sendMessage(cfg.chatId, echo, {
+        message_thread_id: tid,
+        disable_notification: true,
+        reply_markup: cancelTurnKeyboard(tid),
+      })
+      .catch((err) => console.warn(`[queue] echoing the prompt into ${tid} failed:`, String(err)));
+    await startSession(tid, cwd, choice, contentOf(prompt, []));
+  })().catch(async (err) => {
+    console.error(`[queue] starting the session in ${tid} failed:`, err);
+    await bot.api
+      .sendMessage(cfg.chatId, `❌ couldn't start this session: ${String(err)}`, { message_thread_id: tid })
+      .catch(() => {});
+  });
+}
+
 /**
  * Spin up a new topic + session for a launcher message.
  *
@@ -811,46 +901,15 @@ async function launch(
     settings: settingsFromPicks(provider, picks, custom),
     preset: null,
   };
-  const { provider: selectedProvider, settings } = choice;
-  const progress = defaultProgress;
   const toolcalls = nextToolcalls;
   nextToolcalls = "off";
   resetNextSession();
 
-  let topic;
-  for (let attempt = 1; ; attempt++) {
-    try {
-      topic = await ctx.api.createForumTopic(cfg.chatId, title);
-      break;
-    } catch (err) {
-      if (!(err instanceof HttpError) || attempt >= TOPIC_CREATE_ATTEMPTS) throw err;
-      console.warn(
-        `[launch] createForumTopic failed; retry ${attempt}/${TOPIC_CREATE_ATTEMPTS - 1} ` +
-          `in ${TOPIC_CREATE_RETRY_DELAY_MS}ms:`,
-        String(err),
-      );
-      await delay(TOPIC_CREATE_RETRY_DELAY_MS);
-    }
-  }
-  const tid = topic.message_thread_id;
-  createTopic({
-    threadId: tid,
-    cwd,
-    title,
-    provider: selectedProvider,
-    effort: settings.effort,
-    model: settings.model,
-    serviceTier: settings.serviceTier,
-    openrouterSettings: settings.openrouter,
-  });
-  setActivity(tid, "progress", progress);
-  setActivity(tid, "toolcalls", toolcalls);
+  const tid = await openTopic(title, cwd, choice, toolcalls);
 
   // The picker becomes the launch line: one message for one launch, rather than
   // the settled picker and a "→ …" note sitting one above the other.
-  const line =
-    `→ «${title}»  (cwd: ${cwd})  ${providerIcon(selectedProvider)} ${providerLabel(selectedProvider)} · ` +
-    (choice.preset ?? settingsLine(selectedProvider, settings));
+  const line = launchLine(title, cwd, choice);
   const posted =
     messageId !== null &&
     (await ctx.api
@@ -893,16 +952,7 @@ async function launch(
     console.warn(`[launch] echoing the prompt into ${tid} failed:`, String(err));
   }
 
-  await sessionFor(bot, {
-    thread_id: tid,
-    cwd,
-    session_id: null,
-    provider: selectedProvider,
-    effort: settings.effort,
-    model: settings.model,
-    service_tier: settings.serviceTier,
-    openrouter_settings: settings.openrouter,
-  }).send(contentOf(prompt, images));
+  await startSession(tid, cwd, choice, contentOf(prompt, images));
 }
 
 /** Route one inbound user message (with any images already downloaded). */
@@ -1166,6 +1216,9 @@ async function main() {
   });
   registerPermissionButtons(bot);
   startSweep(bot);
+  startLaunchQueue(launchQueued, async (text) => {
+    await bot.api.sendMessage(cfg.chatId, text, { message_thread_id: cfg.launcherThreadId });
+  });
   // From here on `/telegramify` will adopt sessions into this forum.
   startHeartbeat();
   await bot.start({ allowed_updates: ["message", "callback_query"] });

@@ -34,6 +34,8 @@ export const settingsSchema = z.strictObject({
   SESSION_IDLE_MINUTES: positive.default(20),
   PERMISSION_TIMEOUT_MINUTES: positive.default(10),
   INBOX_PATH: text.default("./data/inbox"),
+  // Launches queued by other programs on this machine (`npm run launch`).
+  LAUNCH_QUEUE_PATH: text.default("./data/launch-queue"),
   // Voice and video notes become text through an OpenAI-compatible
   // transcription server. Off unless enabled; the key lives in .env.
   TRANSCRIPTION: z.strictObject({

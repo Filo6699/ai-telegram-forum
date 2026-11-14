@@ -12,8 +12,8 @@ for dependency boundaries and where new features belong.
 |---|---|
 | `src/index.ts` | Stable bot entry point; imports application wiring |
 | `src/codex-tg-server.ts` | Stable MCP subprocess entry point for running Codex sessions |
-| `src/app/` | Bot routing, authentication, heartbeat, idle-topic sweep |
-| `src/cli/` | Session adoption (`telegramify`, `codexify`) and command installation |
+| `src/app/` | Bot routing, authentication, heartbeat, idle-topic sweep, launch-queue polling |
+| `src/cli/` | Session adoption (`telegramify`, `codexify`), queued launches (`launch`), command installation |
 | `src/sessions/` | Topic lifecycle, common agent contracts, factory, usage and limit types |
 | `src/providers/claude/` | Claude SDK options, session runner, plan limits |
 | `src/providers/codex/` | Codex session runner, app-server clients, MCP process, quota accounting |
@@ -34,6 +34,7 @@ npm run typecheck  # tsc --noEmit — must be clean before you commit
 npm run install-command          # install /telegramify for Claude and $telegramify for Codex
 npm run telegramify -- --dry-run # adopt the current terminal session into a topic
 npm run codexify -- --dry-run    # backwards-compatible Codex alias
+npm run launch -- --dry-run --prompt "…"  # queue a session from a script or cron job
 ```
 
 ## Rules

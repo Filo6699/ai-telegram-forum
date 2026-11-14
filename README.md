@@ -329,6 +329,35 @@ npm run telegramify -- --provider claude --session <session-id>
 npm run telegramify -- --provider codex --session <session-id>
 ```
 
+### Start a session from a script
+
+A cron job or another program can start a session without the launcher:
+
+```bash
+npm --prefix /path/to/ai-telegram-forum run --silent launch -- \
+  --cwd @myrepo --preset Opus --title "⏰ Weekly build report" \
+  --prompt-file task.md
+```
+
+Nobody answers a picker for these, so the command names everything itself:
+
+- `--prompt "…"` or `--prompt-file <file>` (`-` reads stdin);
+- `--cwd`: an absolute path or a `PROJECTS` alias with `@`; `DEFAULT_CWD` if omitted;
+- `--preset <name>`, or `--model`, `--effort` and, for Codex, `--service-tier`.
+  A `claude-…` model selects Claude; other models need `--provider`. With
+  neither, the session starts on the default preset;
+- `--title`: a fixed topic title. Without it, the topic is named like a
+  launcher one and Claude renames it later.
+
+The command checks the request against `config.json` and exits non-zero on a
+mistake, such as an unknown preset or a missing folder. Then it writes the request
+to `LAUNCH_QUEUE_PATH` (`./data/launch-queue` by default) and prints its id.
+The bot checks the queue every few seconds. It opens the topic, posts the
+prompt there, and logs the launch in the launcher with ⏰. If the bot is down,
+the request waits for it. If Telegram is unreachable, the bot retries every
+minute. Requests that fail validation on the bot's side move to `failed/`
+next to a `.error` file, and the launcher says why.
+
 ### Model presets
 
 `config.json` holds the default models (`CLAUDE_MODEL`, `CODEX_MODEL`,

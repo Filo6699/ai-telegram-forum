@@ -66,6 +66,7 @@ export function buildConfig(settings: Settings, env: Record<string, string | und
     permissionTimeoutMs: settings.PERMISSION_TIMEOUT_MINUTES * 60_000,
     dbPath: env.DB_PATH ?? "./data/state.db",
     inboxPath: settings.INBOX_PATH,
+    launchQueuePath: settings.LAUNCH_QUEUE_PATH,
     transcription,
     pidPath: env.PID_PATH ?? "./data/bot.pid",
   };

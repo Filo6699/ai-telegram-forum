@@ -34,6 +34,7 @@
     "test": "node --test --import tsx --import ./test/setup-env.ts test/*.test.ts",
     "telegramify": "tsx src/cli/telegramify.ts",
     "codexify": "npm run telegramify -- --provider codex",
+    "launch": "tsx src/cli/launch.ts",
     "install-command": "tsx src/cli/install-command.ts",
     "migrate-config": "tsx src/cli/migrate-config.ts",
     "typecheck": "tsc --noEmit"

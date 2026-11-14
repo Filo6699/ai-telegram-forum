@@ -14,7 +14,14 @@ src/index.ts → app/bot.ts → sessions/topic.ts → sessions/factory.ts
                                  └──── telegram/ ─────┘
 
 cli/telegramify.ts → storage/db.ts + app/heartbeat.ts + Telegram API
+
+cli/launch.ts → storage/launch-queue.ts ← app/launch-queue.ts → app/bot.ts
 ```
+
+A third path starts sessions for other programs. `cli/launch.ts` validates a
+request with `sessions/launch-request.ts` and drops it into the queue folder;
+`app/launch-queue.ts` claims it inside the bot and opens the topic through the
+same code as a launcher message, without the picker.
 
 ## Responsibilities
 
