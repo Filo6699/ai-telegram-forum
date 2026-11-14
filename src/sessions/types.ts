@@ -53,7 +53,8 @@ export interface CompactionResult {
 }
 
 export interface AgentSessionHooks {
-  beginTurn(): Promise<void>;
+  /** `selfStarted`: the provider opened this turn on its own, with nobody in the topic asking. */
+  beginTurn(selfStarted?: boolean): Promise<void>;
   session(id: string): void;
   model?(id: string): void;
   text(value: string): void;
@@ -62,6 +63,8 @@ export interface AgentSessionHooks {
   /** The provider started compacting the context, by request or on its own. */
   compacting?(): void;
   compacted?(result: CompactionResult): void;
+  /** The number of live background tasks changed, in or between turns. */
+  backgroundTasks?(count: number): void;
   /** Wait for a capacity retry decision after a failed main turn. */
   recoverCapacity?(failure: string, retries: number, canRetry: boolean): Promise<boolean>;
 }

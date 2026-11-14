@@ -28,7 +28,8 @@ const NAMED_TOOLS = 3;
 /**
  * One bot-owned message per turn, edited in place: a live "what is it doing
  * right now" line while the turn runs, replaced by the turn's summary when it
- * ends.
+ * ends. Turns the CLI starts to report background work reuse the line of the
+ * turn that launched that work instead of posting their own.
  *
  * This is why tool activity no longer needs to be relayed as chat messages —
  * the topic used to fill up with a "🔧 Bash" post per call. Edits never send a
@@ -65,6 +66,16 @@ export class TurnStatus {
     this.messageId = await this.out.sendText(this.lastText, { silent: true });
     this.lastEditAt = Date.now();
     if (this.detail || this.phaseLabel) this.schedule();
+  }
+
+  /**
+   * Bring a finished line back to life for a turn that continues the same
+   * work — one the CLI started to report a background task. Elapsed time and
+   * tool counts carry on from where the line left off.
+   */
+  resume(): void {
+    this.done = false;
+    this.schedule();
   }
 
   /** Record a tool call and refresh the line (throttled). */

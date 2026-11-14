@@ -136,3 +136,63 @@ test("the topic posts a deferred status only once the background work winds down
   await end({});
   assert.deepEqual(posted, []);
 });
+
+test("turns the CLI starts for background work share one status line, ⌛️ until it winds down", async t => {
+  const threadId = 990_002;
+  createTopic({ threadId, cwd: "/tmp", title: "Waiting line", provider: "claude" });
+  const posted: string[] = [];
+  const edits: Array<[number, string]> = [];
+  const api = {
+    async sendMessage(_chat: number, text: string) { posted.push(text); return { message_id: posted.length }; },
+    async editMessageText(_chat: number, id: number, text: string) { edits.push([id, text]); return true; },
+  };
+  const topic = new TopicSession({ api } as any, threadId, "/tmp", null, "claude");
+  t.after(() => topic.close());
+  const agent = (topic as any).agent;
+  const end = () => (topic as any).endTurn({
+    ok: true, failure: null, stopped: false, sent: 1, usage: { inTokens: 0, outTokens: 0, costUsd: null },
+  });
+  const lastEdit = () => edits.at(-1)!;
+
+  await (topic as any).beginTurn(false);
+  assert.equal(posted.length, 1);
+  agent.tasks = 1;
+  await end();
+  assert.deepEqual(lastEdit()[0], 1);
+  assert.match(lastEdit()[1], /^⌛️/);
+
+  await (topic as any).beginTurn(true);
+  await end();
+  assert.equal(posted.length, 1, "a CLI-started turn reuses the waiting line");
+  assert.match(lastEdit()[1], /^⌛️/);
+
+  await (topic as any).beginTurn(true);
+  agent.tasks = 0;
+  await end();
+  assert.equal(posted.length, 1);
+  assert.deepEqual(lastEdit()[0], 1);
+  assert.match(lastEdit()[1], /^✅/);
+
+  // Background work that ends between turns settles the line on its own.
+  await (topic as any).beginTurn(false);
+  assert.equal(posted.length, 2);
+  agent.tasks = 1;
+  await end();
+  assert.match(lastEdit()[1], /^⌛️/);
+  agent.tasks = 0;
+  await (topic as any).settleWaiting(true);
+  assert.deepEqual(lastEdit(), [2, lastEdit()[1]]);
+  assert.match(lastEdit()[1], /^✅/);
+
+  // A message from the person gets a fresh line and closes the waiting one.
+  agent.tasks = 1;
+  await (topic as any).beginTurn(true);
+  await end();
+  assert.equal(posted.length, 2);
+  await (topic as any).beginTurn(false);
+  await tick();
+  assert.equal(posted.length, 3);
+  assert.ok(edits.some(([id, text]) => id === 2 && /^✅/.test(text)));
+  agent.tasks = 0;
+  await end();
+});

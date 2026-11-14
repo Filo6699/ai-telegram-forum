@@ -190,7 +190,7 @@ export class ClaudeAgentSession implements AgentSession {
     this.quotaRejected = false;
     this.quotaResetsAt = null;
     this.opts.channel.resetSent();
-    await this.opts.hooks.beginTurn();
+    await this.opts.hooks.beginTurn(selfStarted);
   }
 
   private async finish(ok: boolean, usage: Usage, failure: string | null): Promise<void> {
@@ -251,6 +251,7 @@ export class ClaudeAgentSession implements AgentSession {
               this.opts.hooks.session(msg.session_id);
             } else if (msg.subtype === "background_tasks_changed") {
               this.tasks = msg.tasks.filter((task) => !task.ambient).length;
+              this.opts.hooks.backgroundTasks?.(this.tasks);
             } else if (msg.subtype === "status") {
               if (msg.status === "compacting") this.opts.hooks.compacting?.();
               else if (msg.compact_result === "failed") {
@@ -317,7 +318,11 @@ export class ClaudeAgentSession implements AgentSession {
       if (this.turnActive) await this.finish(false, zeroUsage(), failure);
     } finally {
       this.running = false;
-      this.tasks = 0;
+      // A dead CLI takes its background tasks with it.
+      if (this.tasks) {
+        this.tasks = 0;
+        this.opts.hooks.backgroundTasks?.(0);
+      }
       this.q = null;
       clearPermissions(this.opts.threadId);
       if (!this.closed && this.pending.length) void this.run();

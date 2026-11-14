@@ -50,6 +50,8 @@ import { isQuotaFailure } from "./quota-retry.ts";
 export type { AgentInput } from "./types.ts";
 
 const COMPACTING = "🗜 compacting…";
+/** Summary marker for a turn whose background tasks are still running. */
+const WAITING = "⌛️";
 
 /** How long a session with background tasks may stay silent before it is closed anyway. */
 const BACKGROUND_HOLD_MS = 3 * 60 * 60_000;
@@ -98,6 +100,13 @@ export class TopicSession {
    * running. Posted only if the work winds down without the agent ever sending.
    */
   private deferredReply = "";
+  /**
+   * The status line of the last turn that ended with background tasks still
+   * running, shown as ⌛️. A turn the CLI starts to report back picks it up
+   * instead of posting a line of its own; `settled` is its summary once
+   * nothing is left to wait for.
+   */
+  private waiting: { status: TurnStatus; settled: string } | null = null;
   private compacting = false;
   private turnCompactions: CompactionResult[] = [];
 
@@ -139,7 +148,7 @@ export class TopicSession {
       openrouter: openrouterSettings,
       channel,
       hooks: {
-        beginTurn: () => this.beginTurn(),
+        beginTurn: (selfStarted) => this.beginTurn(selfStarted),
         session: (id) => {
           this.sessionId = id;
           setSession(this.threadId, id);
@@ -163,6 +172,9 @@ export class TopicSession {
           this.compacting = false;
           this.turnCompactions.push(result);
           this.status?.phase(null);
+        },
+        backgroundTasks: (count) => {
+          if (!count && !this.turnActive) void this.settleWaiting(true);
         },
         recoverCapacity: (failure, retries, canRetry) => this.closed ? Promise.resolve(false) : this.capacity.recover(
           failure, retries, canRetry && this.turnInputVersion === this.inputVersion,
@@ -317,7 +329,7 @@ export class TopicSession {
         addUsage(this.threadId, result.usage);
       }
       const summary = summarize(
-        result.ok && !result.failure,
+        turnMarker(result.ok && !result.failure, result.stopped),
         status,
         result.usage,
         effort,
@@ -325,7 +337,6 @@ export class TopicSession {
           ? result.resolvedModel
           : model,
         this.provider === "codex" ? this.serviceTier : null,
-        result.stopped,
         [],
         this.provider,
         this.provider === "openrouter" ? null : preset,
@@ -392,6 +403,18 @@ export class TopicSession {
     // Blanket approvals are scoped to the live session, not to the topic.
     clearPermissions(this.threadId);
     this.agent.close();
+    void this.settleWaiting(false);
+  }
+
+  /**
+   * Swap the waiting line's ⌛️ for its final marker. `keep` leaves it open
+   * for the CLI's next turn, which may still come to report what finished.
+   */
+  private async settleWaiting(keep: boolean): Promise<void> {
+    const waiting = this.waiting;
+    if (!waiting) return;
+    if (!keep) this.waiting = null;
+    await waiting.status.finish(waiting.settled);
   }
 
   private armIdleTimer(rearm = false): void {
@@ -415,26 +438,37 @@ export class TopicSession {
   }
 
   /** Idempotent: the first sign of a turn opens the status line, whoever spots it. */
-  private async beginTurn(): Promise<void> {
+  private async beginTurn(selfStarted = false): Promise<void> {
     if (this.turnActive) return;
     this.turnActive = true;
+    // A turn the CLI starts on its own carries on the work behind the waiting
+    // line; anything else gets a line of its own and closes the old one.
+    const resumed = selfStarted ? this.waiting?.status ?? null : null;
+    if (!resumed) void this.settleWaiting(false);
+    this.waiting = null;
     this.turnInputVersion = this.inputVersion;
     this.turnEffort = this.effortLevel;
     this.turnModel = this.modelId;
     this.turnResolvedModel = null;
     this.turnServiceTier = this.serviceTier;
-    this.turnWeeklyBaseline = null;
-    this.turnClaudeBaselineUsd = null;
-    this.turnClaudeRatio = null;
     this.turnCompact = this.compactRequested;
     this.compactRequested = false;
     this.compacting = false;
     this.turnCompactions = [];
+    this.out.clear();
+    if (resumed) {
+      // The weekly share keeps counting from where the work began.
+      this.status = resumed;
+      resumed.resume();
+      return;
+    }
+    this.turnWeeklyBaseline = null;
+    this.turnClaudeBaselineUsd = null;
+    this.turnClaudeRatio = null;
     if (this.provider === "claude") {
       this.turnClaudeRatio = claudeWeeklyRatio();
       this.turnClaudeBaselineUsd = this.sessionId ? claudeSessionUsd(this.sessionId) : 0;
     }
-    this.out.clear();
     this.status = new TurnStatus(this.out, this.statusDetail());
     if (this.turnCompact) this.status.phase(COMPACTING);
     await this.status.start();
@@ -513,20 +547,27 @@ export class TopicSession {
         : this.provider === "claude"
           ? [this.claudeWeeklyPart()].filter((p): p is string => p !== null)
           : [])];
-    await status?.finish(
-      summarize(
-        result.ok && !result.failure,
-        status,
-        result.usage,
-        effort,
-        model,
-        this.provider === "codex" ? this.turnServiceTier : null,
-        result.stopped,
-        extra,
-        this.provider,
-        preset,
-      ),
+    const marker = turnMarker(result.ok && !result.failure, result.stopped);
+    const summary = (mark: string) => summarize(
+      mark,
+      status,
+      result.usage,
+      effort,
+      model,
+      this.provider === "codex" ? this.turnServiceTier : null,
+      extra,
+      this.provider,
+      preset,
     );
+    // Subagents or shells are still running and will report back in a turn
+    // of their own: the work isn't done, whatever this turn says.
+    const waiting = marker === "✅" && !this.closed && (this.agent.backgroundTasks ?? 0) > 0;
+    await status?.finish(summary(waiting ? WAITING : marker));
+    if (waiting && status) {
+      this.waiting = { status, settled: summary(marker) };
+      // The tasks may have wound down while the summary was being edited.
+      if (!this.agent.backgroundTasks) await this.settleWaiting(true);
+    }
     if (this.provider === "claude") void sampleClaudeWeekly(this.live);
     await this.retitle();
     if (!this.closed) {
@@ -579,20 +620,22 @@ function compactionPart(result: CompactionResult): string {
   return "🗜 compacted";
 }
 
+function turnMarker(ok: boolean, stopped: boolean): string {
+  return stopped ? "⏹" : ok ? "✅" : "⚠️";
+}
+
 /** The one line that replaces the live status when a turn ends. */
 function summarize(
-  ok: boolean,
+  marker: string,
   status: TurnStatus | null,
   usage: Usage,
   effort: string,
   model: string,
   serviceTier: ServiceTier,
-  stopped = false,
   extra: string[] = [],
   provider: Provider = "claude",
   preset: string | null = null,
 ): string {
-  const marker = stopped ? "⏹" : ok ? "✅" : "⚠️";
   const parts =
     provider === "codex"
       ? [
