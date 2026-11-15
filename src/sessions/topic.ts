@@ -51,7 +51,7 @@ export type { AgentInput } from "./types.ts";
 
 const COMPACTING = "🗜 compacting…";
 /** Summary marker for a turn whose background tasks are still running. */
-const WAITING = "⌛️";
+const WAITING = "⏳";
 
 /** How long a session with background tasks may stay silent before it is closed anyway. */
 const BACKGROUND_HOLD_MS = 3 * 60 * 60_000;
@@ -102,7 +102,7 @@ export class TopicSession {
   private deferredReply = "";
   /**
    * The status line of the last turn that ended with background tasks still
-   * running, shown as ⌛️. A turn the CLI starts to report back picks it up
+   * running, shown as ⏳. A turn the CLI starts to report back picks it up
    * instead of posting a line of its own; `settled` is its summary once
    * nothing is left to wait for.
    */
@@ -407,7 +407,7 @@ export class TopicSession {
   }
 
   /**
-   * Swap the waiting line's ⌛️ for its final marker. `keep` leaves it open
+   * Swap the waiting line's ⏳ for its final marker. `keep` leaves it open
    * for the CLI's next turn, which may still come to report what finished.
    */
   private async settleWaiting(keep: boolean): Promise<void> {

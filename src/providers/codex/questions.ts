@@ -55,7 +55,7 @@ export class CodexQuestions {
       request, context, questions, answers: Object.create(null), done: false,
       // Start before Telegram's round-trip: cancellation and timeout must also
       // settle a request whose prompt has not appeared yet.
-      timer: setTimeout(() => { void this.finish(group, "⌛ Closed without an answer (timed out)."); }, this.timeoutMs),
+      timer: setTimeout(() => { void this.finish(group, "⏳ Closed without an answer (timed out)."); }, this.timeoutMs),
     };
     this.pending.set(request.id, group);
     if (!questions.length) {
