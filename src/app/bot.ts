@@ -1005,6 +1005,25 @@ async function route(
   });
 }
 
+/**
+ * Messages of one topic run in order, topics run side by side. grammy's polling
+ * awaits each update's handlers before taking the next one, so a slow download
+ * or transcription would freeze every topic. This middleware hands the rest of
+ * the chain to a per-topic queue and returns at once. Callback queries skip it:
+ * they settle prompts and must never wait behind a message.
+ */
+const topicQueues = new Map<string, Promise<void>>();
+bot.on("message", (ctx, next) => {
+  const key = `${ctx.chat.id}:${ctx.message.message_thread_id ?? 0}`;
+  const run = (topicQueues.get(key) ?? Promise.resolve())
+    .then(() => next())
+    .catch((err) => console.error("[bot] unhandled error:", err))
+    .finally(() => {
+      if (topicQueues.get(key) === run) topicQueues.delete(key);
+    });
+  topicQueues.set(key, run);
+});
+
 /** Allowed-user gate + right-forum check, shared by every message handler. */
 const mine = (ctx: any): boolean =>
   cfg.allowedUserIds.includes(ctx.from?.id as number) && ctx.chat.id === cfg.chatId;

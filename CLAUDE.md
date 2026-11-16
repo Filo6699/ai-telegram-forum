@@ -68,8 +68,10 @@ npm run launch -- --dry-run --prompt "…"  # queue a session from a script or c
   through the message handler's gate, so every handler must check
   `ALLOWED_USER_ID` itself. A permission prompt must always settle — button,
   timeout, or session end — or the tool call waits forever.
-- **Never await a button from inside a message handler.** grammy's polling runs
-  updates one at a time, so a handler that waits on a callback query blocks the
+- **Never await a button from inside a message handler.** Message handlers run
+  on a per-topic queue (see `topicQueues` in `bot.ts`), so a slow one delays only its own
+  topic, but a handler waiting on a button still stalls that topic's later messages. grammy's polling runs
+  callback updates one at a time, so a handler that waits on a callback query blocks the
   update that would settle it — the launch flow detaches (`void launch(…)`) for
   exactly that reason. And a `callback_query:data` handler that doesn't own the
   callback must pass it on with `next()`, or the handler registered after it
