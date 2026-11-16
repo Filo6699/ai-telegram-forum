@@ -61,10 +61,14 @@ async function download(api: Api, fileId: string): Promise<{ buf: Buffer; filePa
   // One initial attempt, then up to ten retries, one second apart.
   for (let retries = 0; ; retries++) {
     try {
-      const file = await api.getFile(fileId);
+      const file = await Promise.race([
+        api.getFile(fileId),
+        delay(30_000).then(() => Promise.reject(new Error("getFile timed out"))),
+      ]);
       if (!file.file_path) throw new Error("Telegram returned no file_path");
       const res = await fetch(
         `https://api.telegram.org/file/bot${cfg.token}/${file.file_path}`,
+        { signal: AbortSignal.timeout(30_000) },
       );
       if (!res.ok) {
         await res.body?.cancel().catch(() => {});
@@ -73,7 +77,9 @@ async function download(api: Api, fileId: string): Promise<{ buf: Buffer; filePa
       return { buf: Buffer.from(await res.arrayBuffer()), filePath: file.file_path };
     } catch (error) {
       if (retries >= 10) throw error;
-      console.warn(`[media] File download failed; retry ${retries + 1}/10 in 1s`);
+      console.warn(
+        `[media] File download failed (${error instanceof Error ? error.message : error}); retry ${retries + 1}/10 in 1s`,
+      );
       await delay(1_000);
     }
   }
