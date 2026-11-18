@@ -1,7 +1,7 @@
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { extname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { Api } from "grammy";
+import { type Api, HttpError } from "grammy";
 import type { Message } from "grammy/types";
 import { cfg } from "../config/env.ts";
 
@@ -58,13 +58,22 @@ export async function fetchImage(
 
 /** Fetch a Telegram file's bytes, plus the remote path Telegram named it by. */
 async function download(api: Api, fileId: string): Promise<{ buf: Buffer; filePath: string }> {
-  // One initial attempt, then up to ten retries, one second apart.
+  // One initial attempt, then a few retries with growing pauses. The message
+  // waits on its topic's queue meanwhile, so the whole budget stays near a
+  // minute: when Telegram's getFile is down it stays down for hours, and the
+  // user is better served by a quick "couldn't fetch" than by a frozen topic.
+  const pauses = [1_000, 3_000, 5_000];
   for (let retries = 0; ; retries++) {
     try {
-      const file = await Promise.race([
-        api.getFile(fileId),
-        delay(30_000).then(() => Promise.reject(new Error("getFile timed out"))),
-      ]);
+      // Abort rather than race: a request left hanging holds its keep-alive
+      // socket for grammy's 500-second timeout.
+      const file = await api
+        .getFile(fileId, AbortSignal.timeout(15_000) as Parameters<Api["getFile"]>[1])
+        .catch((error) => {
+          throw error instanceof HttpError && (error.error as Error)?.name === "AbortError"
+            ? new Error("Telegram didn't answer getFile within 15s")
+            : error;
+        });
       if (!file.file_path) throw new Error("Telegram returned no file_path");
       const res = await fetch(
         `https://api.telegram.org/file/bot${cfg.token}/${file.file_path}`,
@@ -76,11 +85,12 @@ async function download(api: Api, fileId: string): Promise<{ buf: Buffer; filePa
       }
       return { buf: Buffer.from(await res.arrayBuffer()), filePath: file.file_path };
     } catch (error) {
-      if (retries >= 10) throw error;
+      const pause = pauses[retries];
+      if (pause === undefined) throw error;
       console.warn(
-        `[media] File download failed (${error instanceof Error ? error.message : error}); retry ${retries + 1}/10 in 1s`,
+        `[media] File download failed (${error instanceof Error ? error.message : error}); retry ${retries + 1}/${pauses.length} in ${pause / 1000}s`,
       );
-      await delay(1_000);
+      await delay(pause);
     }
   }
 }
